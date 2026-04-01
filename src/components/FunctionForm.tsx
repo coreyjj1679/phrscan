@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import type { Abi, PublicClient, Address } from "viem";
+import { isAddress } from "viem";
 import { type AbiFunction, isReadFunction } from "../lib/abi";
 import { readOrSimulate, type CallResult } from "../lib/simulate";
 import {
@@ -26,7 +27,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
   const [args, setArgs] = useState<string[]>(
     initialCall?.functionName === fn.name && initialCall.args.length === fn.inputs.length
       ? initialCall.args
-      : fn.inputs.map(() => ""),
+      : fn.inputs.map((input) => (input.type === "bool" ? "false" : "")),
   );
   const [from, setFrom] = useState(initialCall?.from ?? "");
   const [blockNumber, setBlockNumber] = useState(initialCall?.blockNumber ?? "");
@@ -34,6 +35,8 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
   const [value, setValue] = useState(initialCall?.value ?? "");
   const [showValue, setShowValue] = useState(!!(initialCall?.value));
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<(string | null)[]>(fn.inputs.map(() => null));
+  const [fromError, setFromError] = useState<string | null>(null);
 
   const [savedCalls, setSavedCalls] = useState<SavedCall[]>([]);
   const [showSaveForm, setShowSaveForm] = useState(false);
@@ -55,6 +58,13 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const newErrors = fn.inputs.map((input, i) => validateArg(input.type, args[i]));
+    const newFromError = !isRead && from.trim() ? validateArg("address", from) : null;
+    setErrors(newErrors);
+    setFromError(newFromError);
+    if (newErrors.some(Boolean) || newFromError) return;
+
     setLoading(true);
     onResult(null, null);
 
@@ -164,18 +174,41 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
             {input.name || `arg${i}`}{" "}
             <span className="text-gray-600">({input.type})</span>
           </label>
-          {input.type === "address" && book ? (
+          {input.type === "bool" ? (
+            <select
+              value={args[i] || "false"}
+              onChange={(e) => {
+                const next = [...args];
+                next[i] = e.target.value;
+                setArgs(next);
+                if (errors[i]) {
+                  const ne = [...errors];
+                  ne[i] = null;
+                  setErrors(ne);
+                }
+              }}
+              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-sm text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            >
+              <option value="false">false</option>
+              <option value="true">true</option>
+            </select>
+          ) : input.type === "address" && book ? (
             <AddressSuggestInput
               value={args[i]}
               onChange={(v) => {
                 const next = [...args];
                 next[i] = v;
                 setArgs(next);
+                if (errors[i]) {
+                  const ne = [...errors];
+                  ne[i] = null;
+                  setErrors(ne);
+                }
               }}
               book={book}
               enabled={addressBookSuggest}
               placeholder={input.type}
-              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-sm text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+              className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-sm text-gray-200 outline-none ring-1 ${errors[i] ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
             />
           ) : (
             <input
@@ -185,11 +218,19 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
                 const next = [...args];
                 next[i] = e.target.value;
                 setArgs(next);
+                if (errors[i]) {
+                  const ne = [...errors];
+                  ne[i] = null;
+                  setErrors(ne);
+                }
               }}
               placeholder={input.type}
               spellCheck={false}
-              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-sm text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+              className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-sm text-gray-200 outline-none ring-1 ${errors[i] ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
             />
+          )}
+          {errors[i] && (
+            <p className="mt-1 text-[11px] text-red-400">{errors[i]}</p>
           )}
         </div>
       ))}
@@ -200,21 +241,24 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
           {book ? (
             <AddressSuggestInput
               value={from}
-              onChange={setFrom}
+              onChange={(v) => { setFrom(v); if (fromError) setFromError(null); }}
               book={book}
               enabled={addressBookSuggest}
               placeholder="0x…"
-              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+              className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${fromError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
             />
           ) : (
             <input
               type="text"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(e) => { setFrom(e.target.value); if (fromError) setFromError(null); }}
               placeholder="0x…"
               spellCheck={false}
-              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+              className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${fromError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
             />
+          )}
+          {fromError && (
+            <p className="mt-1 text-[11px] text-red-400">{fromError}</p>
           )}
         </div>
       )}
@@ -331,6 +375,60 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
       )}
     </form>
   );
+}
+
+function validateArg(type: string, value: string): string | null {
+  const trimmed = value.trim();
+
+  if (type === "bool") return null;
+
+  if (type === "address") {
+    if (!trimmed) return "Address is required";
+    if (!isAddress(trimmed)) return "Invalid address (expected 0x + 40 hex chars)";
+    return null;
+  }
+
+  if (type.startsWith("uint")) {
+    if (!trimmed) return "Value is required";
+    try {
+      const n = BigInt(trimmed);
+      if (n < 0n) return "Unsigned integer cannot be negative";
+    } catch {
+      return "Invalid integer";
+    }
+    return null;
+  }
+
+  if (type.startsWith("int")) {
+    if (!trimmed) return "Value is required";
+    try {
+      BigInt(trimmed);
+    } catch {
+      return "Invalid integer";
+    }
+    return null;
+  }
+
+  if (type.startsWith("bytes")) {
+    if (!trimmed) return "Value is required";
+    if (!/^0x[0-9a-fA-F]*$/.test(trimmed)) return "Invalid hex (expected 0x…)";
+    const fixedMatch = type.match(/^bytes(\d+)$/);
+    if (fixedMatch) {
+      const expectedBytes = parseInt(fixedMatch[1], 10);
+      const actualBytes = (trimmed.length - 2) / 2;
+      if (actualBytes !== expectedBytes)
+        return `Expected ${expectedBytes} bytes (${expectedBytes * 2} hex chars), got ${actualBytes}`;
+    }
+    return null;
+  }
+
+  if (type.endsWith("[]")) {
+    if (!trimmed) return "Value is required";
+    return null;
+  }
+
+  if (!trimmed) return "Value is required";
+  return null;
 }
 
 function parseArg(type: string, value: string): unknown {

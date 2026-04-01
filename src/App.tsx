@@ -11,6 +11,7 @@ import { ResultPanel } from "./components/ResultPanel";
 import { TxReplay, TxReceiptPanel, type TxData, type TxReceipt } from "./components/TxReplay";
 import { ContractCode } from "./components/ContractCode";
 import { CallTrace } from "./components/CallTrace";
+import { StateChanges } from "./components/StateChanges";
 import { AddressBookManager } from "./components/AddressBookManager";
 import { fnKey, type AbiFunction } from "./lib/abi";
 import type { CallResult } from "./lib/simulate";
@@ -183,6 +184,7 @@ export default function App() {
           {txReceipt && <TxReceiptPanel receipt={txReceipt} book={addressBook} />}
 
           {txReceipt?.trace && <CallTrace trace={txReceipt.trace} book={addressBook} />}
+          {txReceipt?.stateDiff && <StateChanges diff={txReceipt.stateDiff} book={addressBook} />}
 
           {calldataInitial && (
             <div>

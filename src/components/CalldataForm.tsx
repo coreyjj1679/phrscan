@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { PublicClient, Address, Hex, Abi } from "viem";
-import { toFunctionSelector } from "viem";
+import { isAddress, toFunctionSelector } from "viem";
 import { rawCall, tryDecodeResult, type CallResult } from "../lib/simulate";
 import { extractFunctions } from "../lib/abi";
 import { AddressSuggestInput } from "./AddressSuggestInput";
@@ -31,6 +31,9 @@ export function CalldataForm({ client, abi, contractAddress, initial, onResult, 
   const [value, setValue] = useState(initial?.value ?? "");
   const [blockNumber, setBlockNumber] = useState(initial?.blockNumber ?? "");
   const [loading, setLoading] = useState(false);
+  const [toError, setToError] = useState<string | null>(null);
+  const [fromError, setFromError] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   const hasInitialValue = !!(initial?.value);
   const [showValue, setShowValue] = useState(hasInitialValue);
@@ -38,7 +41,15 @@ export function CalldataForm({ client, abi, contractAddress, initial, onResult, 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!to.trim() || !data.trim()) return;
+
+    const newToError = !to.trim() ? "Address is required" : !isAddress(to.trim()) ? "Invalid address" : null;
+    const newFromError = from.trim() ? (!isAddress(from.trim()) ? "Invalid address" : null) : null;
+    const newDataError = !data.trim() ? "Calldata is required" : !/^0x[0-9a-fA-F]*$/.test(data.trim()) ? "Invalid hex (expected 0x…)" : null;
+    setToError(newToError);
+    setFromError(newFromError);
+    setDataError(newDataError);
+    if (newToError || newFromError || newDataError) return;
+
     setLoading(true);
     onResult(null, null);
 
@@ -87,34 +98,36 @@ export function CalldataForm({ client, abi, contractAddress, initial, onResult, 
         {book ? (
           <AddressSuggestInput
             value={to}
-            onChange={setTo}
+            onChange={(v) => { setTo(v); if (toError) setToError(null); }}
             book={book}
             enabled={addressBookSuggest}
             placeholder="0x…"
-            className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${toError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
           />
         ) : (
           <input
             type="text"
             value={to}
-            onChange={(e) => setTo(e.target.value)}
+            onChange={(e) => { setTo(e.target.value); if (toError) setToError(null); }}
             placeholder="0x…"
             spellCheck={false}
-            className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${toError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
           />
         )}
+        {toError && <p className="mt-1 text-[11px] text-red-400">{toError}</p>}
       </div>
 
       <div>
         <label className="mb-1 block text-xs text-gray-400">Calldata (hex)</label>
         <textarea
           value={data}
-          onChange={(e) => setData(e.target.value)}
+          onChange={(e) => { setData(e.target.value); if (dataError) setDataError(null); }}
           placeholder="0x…"
           rows={3}
           spellCheck={false}
-          className="w-full rounded bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+          className={`w-full rounded bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 outline-none ring-1 ${dataError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
         />
+        {dataError && <p className="mt-1 text-[11px] text-red-400">{dataError}</p>}
       </div>
 
       <div>
@@ -122,22 +135,23 @@ export function CalldataForm({ client, abi, contractAddress, initial, onResult, 
         {book ? (
           <AddressSuggestInput
             value={from}
-            onChange={setFrom}
+            onChange={(v) => { setFrom(v); if (fromError) setFromError(null); }}
             book={book}
             enabled={addressBookSuggest}
             placeholder="0x…"
-            className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${fromError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
           />
         ) : (
           <input
             type="text"
             value={from}
-            onChange={(e) => setFrom(e.target.value)}
+            onChange={(e) => { setFrom(e.target.value); if (fromError) setFromError(null); }}
             placeholder="0x…"
             spellCheck={false}
-            className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            className={`w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ${fromError ? "ring-red-500" : "ring-gray-700"} focus:ring-cyan-600`}
           />
         )}
+        {fromError && <p className="mt-1 text-[11px] text-red-400">{fromError}</p>}
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2">

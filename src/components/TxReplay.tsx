@@ -62,9 +62,10 @@ export function TxReplay({ client, onTxLoaded }: Props) {
         hash: tx.hash,
       };
 
-      const [logs, trace] = await Promise.all([
+      const [logs, trace, stateDiff] = await Promise.all([
         decodeReceiptLogs(receipt.logs),
         fetchTrace(client, trimmed as Hex),
+        fetchStateDiff(client, trimmed as Hex),
       ]);
 
       const txReceipt: TxReceipt = {
@@ -74,6 +75,7 @@ export function TxReplay({ client, onTxLoaded }: Props) {
         logs,
         tx: txData,
         trace,
+        stateDiff,
       };
 
       onTxLoaded(txData, txReceipt);

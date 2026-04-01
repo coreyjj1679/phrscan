@@ -25,12 +25,26 @@ export function ResultPanel({ result, error }: Props) {
 
       {result && !result.error && (
         <>
-          <div className="rounded bg-gray-900 p-3 ring-1 ring-gray-700">
-            <p className="mb-1 text-xs text-gray-400">Decoded</p>
-            <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-sm text-cyan-300">
-              {formatValue(result.decoded)}
-            </pre>
-          </div>
+          {isVoid(result.decoded) ? (
+            <div className="rounded bg-green-950/40 p-3 ring-1 ring-green-800">
+              <p className="text-sm font-medium text-green-400">Success</p>
+              {result.gasEstimate !== undefined && (
+                <p className="mt-1 text-xs text-green-500/80">
+                  Gas estimate:{" "}
+                  <span className="font-mono text-green-400">
+                    {result.gasEstimate.toLocaleString()}
+                  </span>
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="rounded bg-gray-900 p-3 ring-1 ring-gray-700">
+              <p className="mb-1 text-xs text-gray-400">Decoded</p>
+              <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-sm text-cyan-300">
+                {formatValue(result.decoded)}
+              </pre>
+            </div>
+          )}
 
           {result.logs && result.logs.length > 0 && (
             <EventLogs logs={result.logs} />
@@ -47,7 +61,7 @@ export function ResultPanel({ result, error }: Props) {
             </details>
           )}
 
-          {result.gasEstimate !== undefined && (
+          {!isVoid(result.decoded) && result.gasEstimate !== undefined && (
             <p className="text-xs text-gray-500">
               Gas estimate:{" "}
               <span className="font-mono text-gray-300">
@@ -118,8 +132,12 @@ function EventLogs({ logs }: { logs: DecodedLog[] }) {
   );
 }
 
+function isVoid(val: unknown): boolean {
+  return val === undefined || val === null;
+}
+
 function formatValue(val: unknown): string {
-  if (val === undefined || val === null) return "void";
+  if (isVoid(val)) return "void";
   if (typeof val === "bigint") return val.toString();
   if (typeof val === "string") return val;
   if (typeof val === "boolean") return String(val);
