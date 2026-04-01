@@ -12,6 +12,7 @@ import { ResultPanel } from "./components/ResultPanel";
 import { TxReplay, TxReceiptPanel, type TxData, type TxReceipt } from "./components/TxReplay";
 import { ContractCode } from "./components/ContractCode";
 import { CallTrace } from "./components/CallTrace";
+import { MoneyFlow } from "./components/MoneyFlow";
 import { StateChanges } from "./components/StateChanges";
 import { AddressBookManager } from "./components/AddressBookManager";
 import { fnKey, type AbiFunction } from "./lib/abi";
@@ -20,6 +21,7 @@ import { type SavedContract, getSettings, saveSettings } from "./lib/storage";
 
 type Page = "contract" | "replay" | "addresses" | "settings";
 type ContractTab = "functions" | "calldata" | "code";
+type ReplayTab = "receipt" | "trace" | "flow" | "state" | "resim";
 
 export default function App() {
   const { client, rpcUrl, setRpcUrl, connected } = useClient();
@@ -37,7 +39,7 @@ export default function App() {
   const [txReceipt, setTxReceipt] = useState<TxReceipt | null>(null);
   const [replayResult, setReplayResult] = useState<CallResult | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
-  const [showResim, setShowResim] = useState(false);
+  const [replayTab, setReplayTab] = useState<ReplayTab>("receipt");
   const [addressBookSuggest, setAddressBookSuggest] = useState(() => getSettings().addressBookSuggest);
 
   useEffect(() => {
@@ -92,7 +94,7 @@ export default function App() {
     setCalldataKey((k) => k + 1);
     setReplayResult(null);
     setReplayError(null);
-    setShowResim(false);
+    setReplayTab("receipt");
   };
 
   return (
@@ -183,23 +185,52 @@ export default function App() {
             <TxReplay client={client} onTxLoaded={handleTxLoaded} />
           </div>
 
-          {txReceipt && <TxReceiptPanel receipt={txReceipt} book={addressBook} />}
+          {txReceipt && (
+            <>
+              <div className="flex items-center gap-3 border-b border-gray-800 pb-2">
+                <SubTab active={replayTab === "receipt"} onClick={() => setReplayTab("receipt")}>
+                  Receipt
+                </SubTab>
+                {txReceipt.trace && (
+                  <SubTab active={replayTab === "trace"} onClick={() => setReplayTab("trace")}>
+                    Call Trace
+                  </SubTab>
+                )}
+                {txReceipt.trace && (
+                  <SubTab active={replayTab === "flow"} onClick={() => setReplayTab("flow")}>
+                    Money Flow
+                  </SubTab>
+                )}
+                {txReceipt.stateDiff && (
+                  <SubTab active={replayTab === "state"} onClick={() => setReplayTab("state")}>
+                    State Changes
+                  </SubTab>
+                )}
+                {calldataInitial && (
+                  <SubTab active={replayTab === "resim"} onClick={() => setReplayTab("resim")}>
+                    Re-simulate
+                  </SubTab>
+                )}
+              </div>
 
-          {txReceipt?.trace && <CallTrace trace={txReceipt.trace} book={addressBook} />}
-          {txReceipt?.stateDiff && <StateChanges diff={txReceipt.stateDiff} book={addressBook} />}
+              {replayTab === "receipt" && (
+                <TxReceiptPanel receipt={txReceipt} book={addressBook} />
+              )}
 
-          {calldataInitial && (
-            <div>
-              {!showResim ? (
-                <button
-                  onClick={() => setShowResim(true)}
-                  className="text-xs text-gray-500 underline hover:text-gray-300"
-                >
-                  Re-simulate at current state
-                </button>
-              ) : (
-                <>
-                  <SectionLabel>Re-simulate</SectionLabel>
+              {replayTab === "trace" && txReceipt.trace && (
+                <CallTrace trace={txReceipt.trace} book={addressBook} />
+              )}
+
+              {replayTab === "flow" && txReceipt.trace && (
+                <MoneyFlow trace={txReceipt.trace} logs={txReceipt.logs} book={addressBook} />
+              )}
+
+              {replayTab === "state" && txReceipt.stateDiff && (
+                <StateChanges diff={txReceipt.stateDiff} book={addressBook} />
+              )}
+
+              {replayTab === "resim" && calldataInitial && (
+                <div>
                   <p className="mb-2 text-[11px] text-gray-600">
                     Simulates with current contract state (may differ from original execution).
                   </p>
@@ -215,9 +246,12 @@ export default function App() {
                   />
                   <ResultPanel result={replayResult} error={replayError} />
                   {replayResult?.trace && <CallTrace trace={replayResult.trace} book={addressBook} />}
-                </>
+                  {replayResult?.trace && (
+                    <MoneyFlow trace={replayResult.trace} logs={replayResult.logs} book={addressBook} />
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
         </div>
       )}
@@ -323,6 +357,9 @@ export default function App() {
             <>
               <ResultPanel result={result} error={callError} />
               {result?.trace && <CallTrace trace={result.trace} book={addressBook} />}
+              {result?.trace && (
+                <MoneyFlow trace={result.trace} logs={result.logs} book={addressBook} />
+              )}
             </>
           )}
         </div>
