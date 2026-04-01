@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Analytics } from "@vercel/analytics/react";
 import { useClient } from "./hooks/useClient";
 import { useAbi } from "./hooks/useAbi";
 import { useAddressBook } from "./hooks/useAddressBook";
@@ -96,6 +97,7 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-2xl px-3 py-4 sm:px-4 sm:py-6">
+      <Analytics />
       <header className="mb-4">
         <div className="flex items-center justify-between">
           <h1 className="text-base font-bold tracking-tight text-gray-100 sm:text-lg">
