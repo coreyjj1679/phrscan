@@ -144,12 +144,12 @@ type EdgeLayout = {
   edgeGroupSize: number;
 };
 
-const NODE_W = 120;
-const NODE_H = 36;
-const PADDING_X = 40;
-const PADDING_Y = 40;
-const LAYER_GAP_X = 180;
-const NODE_GAP_Y = 56;
+const NODE_W = 140;
+const NODE_H = 40;
+const PADDING_X = 50;
+const PADDING_Y = 50;
+const LAYER_GAP_X = 260;
+const NODE_GAP_Y = 72;
 
 function computeInitialPositions(
   addresses: string[],
@@ -277,48 +277,133 @@ function buildEdges(transfers: Transfer[], nodeMap: Map<string, NodeLayout>): Ed
   return result;
 }
 
-type TokenMeta = { symbol: string; decimals: number };
+type TokenMeta = { symbol: string; decimals: number; name: string };
 
-const erc20Abi = [
+const erc20StringAbi = [
   { type: "function", name: "symbol", inputs: [], outputs: [{ type: "string" }], stateMutability: "view" },
   { type: "function", name: "decimals", inputs: [], outputs: [{ type: "uint8" }], stateMutability: "view" },
+  { type: "function", name: "name", inputs: [], outputs: [{ type: "string" }], stateMutability: "view" },
 ] as const;
+
+const erc20Bytes32Abi = [
+  { type: "function", name: "symbol", inputs: [], outputs: [{ type: "bytes32" }], stateMutability: "view" },
+  { type: "function", name: "name", inputs: [], outputs: [{ type: "bytes32" }], stateMutability: "view" },
+] as const;
+
+function bytes32ToString(b: string): string {
+  const hex = b.startsWith("0x") ? b.slice(2) : b;
+  let str = "";
+  for (let i = 0; i < hex.length; i += 2) {
+    const code = parseInt(hex.slice(i, i + 2), 16);
+    if (code === 0) break;
+    str += String.fromCharCode(code);
+  }
+  return str;
+}
+
+async function fetchTokenMeta(client: PublicClient, addr: string): Promise<TokenMeta | null> {
+  const address = addr as Address;
+
+  // Skip EOAs — no code means no contract calls to make
+  try {
+    const code = await client.getCode({ address });
+    if (!code || code === "0x") return null;
+  } catch { return null; }
+
+  let symbol = "";
+  let name = "";
+  let decimals = 18;
+
+  // Try decimals
+  try {
+    const d = await client.readContract({ address, abi: erc20StringAbi, functionName: "decimals" });
+    decimals = Number(d);
+  } catch { /* default 18 */ }
+
+  // Try symbol (string)
+  try {
+    const s = await client.readContract({ address, abi: erc20StringAbi, functionName: "symbol" });
+    symbol = s as string;
+  } catch {
+    // Try symbol (bytes32 — e.g. MKR-style)
+    try {
+      const s = await client.readContract({ address, abi: erc20Bytes32Abi, functionName: "symbol" });
+      symbol = bytes32ToString(s as string);
+    } catch { /* give up */ }
+  }
+
+  // Try name (string)
+  try {
+    const n = await client.readContract({ address, abi: erc20StringAbi, functionName: "name" });
+    name = n as string;
+  } catch {
+    // Try name (bytes32)
+    try {
+      const n = await client.readContract({ address, abi: erc20Bytes32Abi, functionName: "name" });
+      name = bytes32ToString(n as string);
+    } catch { /* give up */ }
+  }
+
+  return {
+    symbol: symbol || shortAddr(addr),
+    decimals,
+    name: name || symbol || "",
+  };
+}
+
+const metaCache = new Map<string, TokenMeta>();
+const metaInflight = new Set<string>();
 
 function useTokenMeta(client: PublicClient, tokenAddresses: string[]) {
   const [meta, setMeta] = useState<Map<string, TokenMeta>>(new Map());
-  const fetchedRef = useRef(new Set<string>());
 
   useEffect(() => {
-    const toFetch = tokenAddresses.filter((a) => a && !fetchedRef.current.has(a));
-    if (toFetch.length === 0) return;
-    for (const addr of toFetch) fetchedRef.current.add(addr);
+    // Sync any cached results first
+    const cached = new Map<string, TokenMeta>();
+    for (const a of tokenAddresses) {
+      const c = metaCache.get(a);
+      if (c) cached.set(a, c);
+    }
+    if (cached.size > 0) {
+      setMeta((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of cached) next.set(k, v);
+        return next;
+      });
+    }
 
-    let cancelled = false;
-    (async () => {
+    const toFetch = tokenAddresses.filter(
+      (a) => a && !metaCache.has(a) && !metaInflight.has(a),
+    );
+    if (toFetch.length === 0) return;
+    for (const addr of toFetch) metaInflight.add(addr);
+
+    const doFetch = async () => {
       const results = new Map<string, TokenMeta>();
-      await Promise.all(
+      await Promise.allSettled(
         toFetch.map(async (addr) => {
           try {
-            const [symbol, decimals] = await Promise.all([
-              client.readContract({ address: addr as Address, abi: erc20Abi, functionName: "symbol" }),
-              client.readContract({ address: addr as Address, abi: erc20Abi, functionName: "decimals" }),
-            ]);
-            results.set(addr, { symbol: symbol as string, decimals: Number(decimals) });
-          } catch {
-            results.set(addr, { symbol: shortAddr(addr), decimals: 18 });
+            const m = await fetchTokenMeta(client, addr);
+            if (m) {
+              results.set(addr, m);
+              metaCache.set(addr, m);
+            }
+          } finally {
+            metaInflight.delete(addr);
           }
         }),
       );
-      if (!cancelled) {
+      if (results.size > 0) {
         setMeta((prev) => {
           const next = new Map(prev);
           for (const [k, v] of results) next.set(k, v);
           return next;
         });
       }
-    })();
-    return () => { cancelled = true; };
-  }, [client, tokenAddresses]);
+    };
+    doFetch();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, tokenAddresses.join(",")]);
 
   return meta;
 }
@@ -348,15 +433,17 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
     return result;
   }, [trace, logs]);
 
-  const tokenAddresses = useMemo(() => {
+  const contractAddresses = useMemo(() => {
     const set = new Set<string>();
     for (const t of rawTransfers) {
       if (t.tokenAddress) set.add(t.tokenAddress);
+      set.add(t.from);
+      set.add(t.to);
     }
     return [...set];
   }, [rawTransfers]);
 
-  const tokenMeta = useTokenMeta(client, tokenAddresses);
+  const tokenMeta = useTokenMeta(client, contractAddresses);
 
   const transfers = useMemo(() => {
     return rawTransfers.map((t) => {
@@ -401,14 +488,16 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
   const nodes: NodeLayout[] = useMemo(() => {
     return addresses.map((addr) => {
       const pos = nodePositions.get(addr);
+      const bookLabel = book.resolve(addr);
+      const tokenLabel = tokenMeta.get(addr)?.name;
       return {
         id: addr,
         x: pos?.x ?? 0,
         y: pos?.y ?? 0,
-        label: book.resolve(addr),
+        label: bookLabel || tokenLabel,
       };
     });
-  }, [addresses, nodePositions, book]);
+  }, [addresses, nodePositions, book, tokenMeta]);
 
   const nodeMap = useMemo(() => {
     const map = new Map<string, NodeLayout>();
@@ -458,8 +547,8 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
   const ys = nodes.map((n) => n.y);
   const maxX = xs.length > 0 ? Math.max(...xs) : PADDING_X;
   const maxY = ys.length > 0 ? Math.max(...ys) : PADDING_Y;
-  const svgWidth = Math.max(containerWidth, maxX + NODE_W / 2 + PADDING_X + 80);
-  const svgHeight = Math.max(120, maxY + NODE_H / 2 + PADDING_Y);
+  const svgWidth = Math.max(containerWidth, maxX + NODE_W / 2 + PADDING_X + 100);
+  const svgHeight = Math.max(160, maxY + NODE_H / 2 + PADDING_Y);
 
   if (transfers.length === 0) {
     return (
@@ -492,7 +581,7 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
         </label>
       </div>
 
-      <div className="overflow-auto rounded-md border border-gray-800/40" style={{ maxHeight: 420 }}>
+      <div className="overflow-auto rounded-md border border-gray-800/40" style={{ maxHeight: 600 }}>
         <svg
           ref={svgRef}
           width={svgWidth}
@@ -554,6 +643,8 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
       </div>
 
       <TransferTable transfers={transfers} book={book} useLabels={useLabels} hoveredIdx={hoveredIdx} onHover={setHoveredIdx} />
+      <TokenList transfers={transfers} tokenMeta={tokenMeta} />
+      <BalanceChanges transfers={transfers} book={book} useLabels={useLabels} tokenMeta={tokenMeta} />
     </div>
   );
 }
@@ -629,7 +720,7 @@ function FlowEdge({ edge, highlighted, dimmed }: {
 
   if (isSelf) {
     const r = 22;
-    const labelX = from.x + halfW + r + 55;
+    const labelX = from.x + halfW + r + 75;
     const labelY = from.y;
     return (
       <g opacity={edgeOpacity}>
@@ -642,9 +733,9 @@ function FlowEdge({ edge, highlighted, dimmed }: {
           markerEnd={`url(#${markerId})`}
         />
         <rect
-          x={labelX - 55}
+          x={labelX - 75}
           y={labelY - 9}
-          width={110}
+          width={150}
           height={18}
           rx={4}
           fill="#111827"
@@ -653,11 +744,11 @@ function FlowEdge({ edge, highlighted, dimmed }: {
           strokeWidth={0.5}
           strokeOpacity={0.4}
         />
-        <text x={labelX - 46} y={labelY} dominantBaseline="central" fill="#6b7280" fontSize={8} fontFamily="monospace" fontWeight="bold">
+        <text x={labelX - 66} y={labelY} dominantBaseline="central" fill="#6b7280" fontSize={8} fontFamily="monospace" fontWeight="bold">
           {logLabel}
         </text>
-        <text x={labelX - 30} y={labelY} dominantBaseline="central" fill={color} fontSize={9} fontFamily="monospace">
-          {amountStr.length > 16 ? amountStr.slice(0, 14) + "…" : amountStr}
+        <text x={labelX - 48} y={labelY} dominantBaseline="central" fill={color} fontSize={9} fontFamily="monospace">
+          {amountStr.length > 22 ? amountStr.slice(0, 20) + "…" : amountStr}
         </text>
       </g>
     );
@@ -689,9 +780,9 @@ function FlowEdge({ edge, highlighted, dimmed }: {
         markerEnd={`url(#${markerId})`}
       />
       <rect
-        x={midX - 55}
+        x={midX - 75}
         y={midY - 10}
-        width={110}
+        width={150}
         height={18}
         rx={4}
         fill="#111827"
@@ -701,7 +792,7 @@ function FlowEdge({ edge, highlighted, dimmed }: {
         strokeOpacity={0.4}
       />
       <text
-        x={midX - 46}
+        x={midX - 66}
         y={midY}
         dominantBaseline="central"
         fill="#6b7280"
@@ -712,14 +803,14 @@ function FlowEdge({ edge, highlighted, dimmed }: {
         {logLabel}
       </text>
       <text
-        x={midX - 30}
+        x={midX - 48}
         y={midY}
         dominantBaseline="central"
         fill={color}
         fontSize={9}
         fontFamily="monospace"
       >
-        {amountStr.length > 16 ? amountStr.slice(0, 14) + "…" : amountStr}
+        {amountStr.length > 22 ? amountStr.slice(0, 20) + "…" : amountStr}
       </text>
     </g>
   );
@@ -861,6 +952,239 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function TokenList({ transfers, tokenMeta }: {
+  transfers: Transfer[];
+  tokenMeta: Map<string, TokenMeta>;
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const tokens = useMemo(() => {
+    const seen = new Map<string, { tokenAddress: string; symbol: string; decimals: number; name: string }>();
+    // Native
+    if (transfers.some((t) => !t.tokenAddress)) {
+      seen.set("native", { tokenAddress: "", symbol: "PHRS", decimals: 18, name: "Pharos Native Token" });
+    }
+    for (const t of transfers) {
+      if (!t.tokenAddress || seen.has(t.tokenAddress)) continue;
+      const meta = tokenMeta.get(t.tokenAddress);
+      seen.set(t.tokenAddress, {
+        tokenAddress: t.tokenAddress,
+        symbol: meta?.symbol ?? t.symbol,
+        decimals: meta?.decimals ?? t.decimals,
+        name: meta?.name ?? "",
+      });
+    }
+    return [...seen.values()];
+  }, [transfers, tokenMeta]);
+
+  if (tokens.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <h4 className="text-xs font-semibold text-gray-400">Tokens Involved</h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-gray-800 text-left text-gray-500">
+              <th className="px-2 py-1 font-medium">Symbol</th>
+              <th className="px-2 py-1 font-medium">Name</th>
+              <th className="px-2 py-1 font-medium">Decimals</th>
+              <th className="px-2 py-1 font-medium">Contract</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tokens.map((tok) => {
+              const isNative = !tok.tokenAddress;
+              return (
+                <tr key={tok.tokenAddress || "native"} className="border-b border-gray-800/50">
+                  <td className="px-2 py-1.5">
+                    <span className={`font-mono font-semibold ${isNative ? "text-yellow-400" : "text-violet-400"}`}>
+                      {tok.symbol}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-gray-300">
+                    {tok.name || <span className="text-gray-600">—</span>}
+                  </td>
+                  <td className="px-2 py-1.5 font-mono text-gray-400">{tok.decimals}</td>
+                  <td className="px-2 py-1.5">
+                    {isNative ? (
+                      <span className="text-gray-600">Native</span>
+                    ) : (
+                      <span
+                        className="cursor-pointer font-mono text-gray-400 hover:text-gray-200"
+                        title={tok.tokenAddress}
+                        onClick={() => {
+                          navigator.clipboard.writeText(tok.tokenAddress);
+                          setCopied(tok.tokenAddress);
+                          setTimeout(() => setCopied(null), 1200);
+                        }}
+                      >
+                        {copied === tok.tokenAddress ? "copied!" : tok.tokenAddress}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+type BalanceEntry = {
+  address: string;
+  token: string;
+  tokenAddress: string;
+  symbol: string;
+  decimals: number;
+  received: bigint;
+  sent: bigint;
+  net: bigint;
+};
+
+function BalanceChanges({ transfers, book, useLabels, tokenMeta }: {
+  transfers: Transfer[];
+  book: AddressBook;
+  useLabels: boolean;
+  tokenMeta: Map<string, TokenMeta>;
+}) {
+  const entries = useMemo(() => {
+    const map = new Map<string, BalanceEntry>();
+    const key = (addr: string, tokenAddr: string) => `${addr}::${tokenAddr}`;
+
+    for (const t of transfers) {
+      const tokenKey = t.tokenAddress || "native";
+
+      const fromKey = key(t.from, tokenKey);
+      if (!map.has(fromKey)) {
+        map.set(fromKey, {
+          address: t.from,
+          token: tokenKey,
+          tokenAddress: t.tokenAddress,
+          symbol: t.symbol,
+          decimals: t.decimals,
+          received: 0n,
+          sent: 0n,
+          net: 0n,
+        });
+      }
+      const fromEntry = map.get(fromKey)!;
+      fromEntry.sent += t.amount;
+      fromEntry.net = fromEntry.received - fromEntry.sent;
+
+      const toKey = key(t.to, tokenKey);
+      if (!map.has(toKey)) {
+        map.set(toKey, {
+          address: t.to,
+          token: tokenKey,
+          tokenAddress: t.tokenAddress,
+          symbol: t.symbol,
+          decimals: t.decimals,
+          received: 0n,
+          sent: 0n,
+          net: 0n,
+        });
+      }
+      const toEntry = map.get(toKey)!;
+      toEntry.received += t.amount;
+      toEntry.net = toEntry.received - toEntry.sent;
+    }
+
+    const result = [...map.values()];
+    result.sort((a, b) => {
+      if (a.address !== b.address) return a.address < b.address ? -1 : 1;
+      return a.token < b.token ? -1 : 1;
+    });
+    return result;
+  }, [transfers]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, BalanceEntry[]>();
+    for (const e of entries) {
+      if (!map.has(e.address)) map.set(e.address, []);
+      map.get(e.address)!.push(e);
+    }
+    return map;
+  }, [entries]);
+
+  const resolveAddr = (addr: string) => {
+    if (useLabels) {
+      const label = book.resolve(addr);
+      if (label) return label;
+      const meta = tokenMeta.get(addr);
+      if (meta?.name) return meta.name;
+    }
+    return shortAddr(addr);
+  };
+
+  if (entries.length === 0) return null;
+
+  const rows = useMemo(() => {
+    const result: { address: string; entry: BalanceEntry }[] = [];
+    for (const [addr, items] of grouped) {
+      for (const e of items) result.push({ address: addr, entry: e });
+    }
+    return result;
+  }, [grouped]);
+
+  return (
+    <div className="space-y-1">
+      <h4 className="text-xs font-semibold text-gray-400">Balance Changes</h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-gray-800 text-left text-gray-500">
+              <th className="px-2 py-1 font-medium">Address</th>
+              <th className="px-2 py-1 font-medium">Token</th>
+              <th className="px-2 py-1 font-medium text-right">Net Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ address, entry: e }, i) => {
+              const isNative = !e.tokenAddress;
+              const netPositive = e.net > 0n;
+              const netNegative = e.net < 0n;
+              return (
+                <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                  <td className="px-2 py-1.5">
+                    <span
+                      className={`font-mono ${
+                        useLabels && (book.resolve(address) || tokenMeta.get(address)?.name)
+                          ? "text-cyan-300"
+                          : "text-gray-400"
+                      }`}
+                      title={address}
+                    >
+                      {resolveAddr(address)}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span className={`font-mono ${isNative ? "text-yellow-500" : "text-violet-400"}`}>
+                      {e.symbol}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    <span
+                      className={`font-mono font-semibold ${
+                        netPositive ? "text-green-400" : netNegative ? "text-red-400" : "text-gray-600"
+                      }`}
+                      title={formatParsedFull(e.net < 0n ? -e.net : e.net, e.decimals)}
+                    >
+                      {e.net === 0n ? "0" : `${netPositive ? "+" : "-"}${formatParsed(e.net < 0n ? -e.net : e.net, e.decimals)}`}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
