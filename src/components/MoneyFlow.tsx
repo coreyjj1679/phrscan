@@ -536,7 +536,7 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
           </defs>
 
           {edges.map((edge, i) => (
-            <FlowEdge key={i} edge={edge} nodeH={NODE_H} highlighted={hoveredIdx === edge.transferIndex} dimmed={hoveredIdx !== null && hoveredIdx !== edge.transferIndex} />
+            <FlowEdge key={i} edge={edge} highlighted={hoveredIdx === edge.transferIndex} dimmed={hoveredIdx !== null && hoveredIdx !== edge.transferIndex} />
           ))}
 
           {nodes.map((node) => (
@@ -602,9 +602,8 @@ function FlowNode({ node, useLabels, w, h, onPointerDown, isDragging }: {
   );
 }
 
-function FlowEdge({ edge, nodeH, highlighted, dimmed }: {
+function FlowEdge({ edge, highlighted, dimmed }: {
   edge: EdgeLayout;
-  nodeH: number;
   highlighted: boolean;
   dimmed: boolean;
 }) {
