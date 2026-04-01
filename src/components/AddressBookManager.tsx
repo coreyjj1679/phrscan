@@ -519,8 +519,3 @@ export function AddressBookManager({ book }: Props) {
     </div>
   );
 }
-
-function shortAddr(addr: string): string {
-  if (!addr || addr.length < 10) return addr;
-  return addr.slice(0, 6) + "\u2026" + addr.slice(-4);
-}
