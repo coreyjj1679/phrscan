@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { AddressBook } from "../hooks/useAddressBook";
+import { EXPLORER_URL } from "../config/chain";
 
 type Props = {
   address: string;
@@ -27,10 +28,9 @@ export function AddressLabel({ address, book, className = "" }: Props) {
 
   useEffect(() => {
     if (showSave) {
-      setInput(label ?? "");
-      setTimeout(() => inputRef.current?.focus(), 0);
+      inputRef.current?.focus();
     }
-  }, [showSave, label]);
+  }, [showSave]);
 
   const handleSave = () => {
     const trimmed = input.trim();
@@ -55,11 +55,24 @@ export function AddressLabel({ address, book, className = "" }: Props) {
         title={address}
         onClick={(e) => {
           e.stopPropagation();
+          setInput(label ?? "");
           setShowSave(true);
         }}
       >
         {label ?? short}
       </span>
+      <a
+        href={`${EXPLORER_URL}/address/${address}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="text-gray-600 transition-colors hover:text-cyan-400"
+        title="View on PharosScan"
+      >
+        <svg className="size-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3M10 2h4m0 0v4m0-4L7 9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </a>
 
       {showSave && (
         <div

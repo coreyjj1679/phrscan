@@ -16,13 +16,13 @@ export function StateChanges({ diff, book }: Props) {
   if (addresses.length === 0) return null;
 
   return (
-    <div className="space-y-2 rounded bg-gray-900/50 p-3 sm:p-4">
-      <h3 className="text-sm font-semibold text-gray-200">
-        State Changes
-        <span className="ml-2 text-[11px] font-normal text-gray-500">
+    <div className="space-y-3 rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-gray-100">State Changes</h3>
+        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-400">
           {addresses.length} account{addresses.length !== 1 ? "s" : ""}
         </span>
-      </h3>
+      </div>
       <div className="space-y-1.5">
         {addresses.map((addr) => (
           <AccountDiff
@@ -74,7 +74,7 @@ function AccountDiff({
   if (!hasChanges) return null;
 
   return (
-    <details className="group rounded bg-gray-900 ring-1 ring-gray-700">
+    <details className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50">
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2">
         <CopyableAddress address={address} display={display} hasLabel={!!label} />
         <div className="flex flex-wrap gap-1.5">

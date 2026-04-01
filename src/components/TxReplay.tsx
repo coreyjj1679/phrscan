@@ -1,11 +1,12 @@
-import { useState } from "react";
-import type { PublicClient, Hex, Address, Log } from "viem";
-import { formatEther, decodeEventLog } from "viem";
+import { useState, useMemo } from "react";
+import type { PublicClient, Hex, Address, Log, Abi } from "viem";
+import { formatEther, decodeEventLog, decodeFunctionData } from "viem";
 import type { DecodedLog } from "../lib/simulate";
 import { fetchTrace, fetchStateDiff, type TraceCall, type StateDiff } from "../lib/trace";
 import { AddressLabel } from "./AddressLabel";
 import type { AddressBook } from "../hooks/useAddressBook";
 import { getAbiRegistry } from "../lib/storage";
+import { EXPLORER_URL } from "../config/chain";
 
 export type TxData = {
   to: Address;
@@ -124,11 +125,11 @@ export function TxReceiptPanel({
   const valBigInt = BigInt(tx.value);
 
   return (
-    <div className="space-y-3 rounded bg-gray-900/50 p-3 sm:p-4">
+    <div className="space-y-4 rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold text-gray-200">Transaction Receipt</h3>
+        <h3 className="text-sm font-semibold text-gray-100">Transaction Receipt</h3>
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
             receipt.status === "success"
               ? "bg-green-900/50 text-green-400"
               : "bg-red-900/50 text-red-400"
@@ -138,39 +139,70 @@ export function TxReceiptPanel({
         </span>
       </div>
 
-      <div className="space-y-1.5 text-xs">
-        <InfoRow label="Block" value={receipt.blockNumber.toString()} />
-        <AddrRow label="From" address={tx.from} book={book} />
-        <AddrRow label="To" address={tx.to} book={book} />
-        {valBigInt > 0n && (
-          <InfoRow label="Value" value={`${formatEther(valBigInt)} PHRS`} />
-        )}
-        <InfoRow label="Gas" value={receipt.gasUsed.toLocaleString()} />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Tx Hash</span>
+          <a
+            href={`${EXPLORER_URL}/tx/${tx.hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-cyan-400 hover:text-cyan-300"
+          >
+            {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
+            <svg className="size-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3M10 2h4m0 0v4m0-4L7 9" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </a>
+        </div>
+        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Block</span>
+          <p className="mt-0.5 font-mono text-xs text-gray-200">{receipt.blockNumber.toString()}</p>
+        </div>
       </div>
 
-      <details className="group">
-        <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">
-          Input data ({tx.data.length / 2 - 1} bytes)
-        </summary>
-        <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-gray-900 p-2 font-mono text-[11px] text-gray-500 ring-1 ring-gray-800">
-          {tx.data}
-        </pre>
-      </details>
+      <div className="space-y-2 rounded-md bg-gray-950/50 px-3 py-2.5 ring-1 ring-gray-800/50">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="w-10 shrink-0 text-[10px] font-medium uppercase tracking-wider text-gray-600">From</span>
+          <AddressLabel address={tx.from} book={book} />
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="w-10 shrink-0 text-[10px] font-medium uppercase tracking-wider text-gray-600">To</span>
+          <AddressLabel address={tx.to} book={book} />
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {valBigInt > 0n && (
+          <div className="rounded-md bg-yellow-950/20 px-3 py-2 ring-1 ring-yellow-900/30">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-yellow-600">Value</span>
+            <p className="mt-0.5 font-mono text-xs text-yellow-400">{formatEther(valBigInt)} PHRS</p>
+          </div>
+        )}
+        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Gas Used</span>
+          <p className="mt-0.5 font-mono text-xs text-gray-200">{receipt.gasUsed.toLocaleString()}</p>
+        </div>
+      </div>
+
+      <InputDataSection data={tx.data} to={tx.to} />
 
       {receipt.logs.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-semibold text-gray-400">
-            Events ({receipt.logs.length})
-          </p>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold text-gray-300">Events</p>
+            <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400">
+              {receipt.logs.length}
+            </span>
+          </div>
           {receipt.logs.map((log, i) => (
-            <details key={i} className="group rounded bg-gray-900 ring-1 ring-gray-700">
+            <details key={i} className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50">
               <summary className="flex cursor-pointer items-center gap-2 overflow-hidden px-3 py-2">
-                <span className="shrink-0 rounded bg-violet-900/50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-violet-400">
+                <span className="shrink-0 rounded bg-violet-900/40 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-violet-400 ring-1 ring-violet-800/30">
                   {log.eventName}
                 </span>
                 <AddressLabel address={log.address} book={book} className="min-w-0" />
               </summary>
-              <div className="border-t border-gray-800 px-3 py-2">
+              <div className="border-t border-gray-800/50 px-3 py-2">
                 {Object.keys(log.args).length > 0 ? (
                   <div className="space-y-1">
                     {Object.entries(log.args).map(([key, val]) => (
@@ -216,41 +248,111 @@ export function TxReceiptPanel({
   );
 }
 
-function InfoRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex gap-2">
-      <span className="w-16 shrink-0 text-gray-500">{label}</span>
-      <span
-        className={`break-all text-gray-200 ${mono ? "font-mono text-[11px]" : ""}`}
-      >
-        {value}
-      </span>
-    </div>
-  );
+type DecodedInput = {
+  functionName: string;
+  args: readonly unknown[];
+  argNames: string[];
+  argTypes: string[];
+};
+
+function tryDecodeInput(data: Hex, to: Address): DecodedInput | null {
+  if (!data || data === "0x" || data.length < 10) return null;
+
+  const abiMap = getAbiRegistry();
+  const abisToTry: Abi[] = [];
+
+  const contractAbi = abiMap.get(to.toLowerCase());
+  if (contractAbi) abisToTry.push(contractAbi);
+  for (const [addr, abi] of abiMap) {
+    if (addr !== to.toLowerCase()) abisToTry.push(abi);
+  }
+
+  for (const abi of abisToTry) {
+    try {
+      const decoded = decodeFunctionData({ abi, data });
+      const fnAbi = (abi as readonly Record<string, unknown>[]).find(
+        (item) =>
+          item.type === "function" && item.name === decoded.functionName,
+      ) as { inputs?: { name?: string; type: string }[] } | undefined;
+
+      const argNames = fnAbi?.inputs?.map((inp) => inp.name ?? "") ?? [];
+      const argTypes = fnAbi?.inputs?.map((inp) => inp.type) ?? [];
+
+      return {
+        functionName: decoded.functionName,
+        args: decoded.args ?? [],
+        argNames,
+        argTypes,
+      };
+    } catch {
+      // ABI didn't match
+    }
+  }
+  return null;
 }
 
-function AddrRow({
-  label,
-  address,
-  book,
-}: {
-  label: string;
-  address: string;
-  book: AddressBook;
-}) {
+function InputDataSection({ data, to }: { data: Hex; to: Address }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const decoded = useMemo(() => tryDecodeInput(data, to), [data, to]);
+  const byteLen = data.length > 2 ? (data.length - 2) / 2 : 0;
+
+  if (!data || data === "0x") {
+    return (
+      <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
+        <span className="text-xs text-gray-500">No input data</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex gap-2">
-      <span className="w-16 shrink-0 text-gray-500">{label}</span>
-      <AddressLabel address={address} book={book} />
-    </div>
+    <details className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50" open>
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:text-gray-300">
+        <span>Input data</span>
+        <span className="text-[10px] text-gray-600">({byteLen} bytes)</span>
+        {decoded && (
+          <span className="rounded bg-emerald-900/40 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-800/30">
+            {decoded.functionName}
+          </span>
+        )}
+        {decoded && (
+          <button
+            onClick={(e) => { e.preventDefault(); setShowRaw((v) => !v); }}
+            className="ml-auto rounded bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400 transition-colors hover:bg-gray-700 hover:text-gray-200"
+          >
+            {showRaw ? "Parsed" : "Raw"}
+          </button>
+        )}
+      </summary>
+      <div className="border-t border-gray-800/50">
+        {decoded && !showRaw ? (
+          <div className="space-y-1 px-3 py-2">
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-xs font-semibold text-emerald-400">{decoded.functionName}</span>
+              <span className="text-[10px] text-gray-600">({decoded.args.length} args)</span>
+            </div>
+            {decoded.args.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {Array.from(decoded.args).map((arg, i) => (
+                  <div key={i} className="flex gap-2 text-xs">
+                    <span className="shrink-0 text-gray-600">
+                      {decoded.argNames[i] || `[${i}]`}
+                      {decoded.argTypes[i] && (
+                        <span className="ml-1 text-[10px] text-gray-700">{decoded.argTypes[i]}</span>
+                      )}
+                    </span>
+                    <span className="break-all font-mono text-cyan-300">{formatVal(arg)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <pre className="max-h-32 overflow-auto px-3 py-2 whitespace-pre-wrap break-all font-mono text-[11px] text-gray-500">
+            {data}
+          </pre>
+        )}
+      </div>
+    </details>
   );
 }
 

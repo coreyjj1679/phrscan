@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Analytics } from "@vercel/analytics/react";
 import { useClient } from "./hooks/useClient";
 import { useAbi } from "./hooks/useAbi";
@@ -16,6 +16,7 @@ import { MoneyFlow } from "./components/MoneyFlow";
 import { StateChanges } from "./components/StateChanges";
 import { AddressBookManager } from "./components/AddressBookManager";
 import { fnKey, type AbiFunction } from "./lib/abi";
+import { countCalls } from "./lib/trace";
 import type { CallResult } from "./lib/simulate";
 import { type SavedContract, getSettings, saveSettings } from "./lib/storage";
 
@@ -187,31 +188,12 @@ export default function App() {
 
           {txReceipt && (
             <>
-              <div className="flex items-center gap-3 border-b border-gray-800 pb-2">
-                <SubTab active={replayTab === "receipt"} onClick={() => setReplayTab("receipt")}>
-                  Receipt
-                </SubTab>
-                {txReceipt.trace && (
-                  <SubTab active={replayTab === "trace"} onClick={() => setReplayTab("trace")}>
-                    Call Trace
-                  </SubTab>
-                )}
-                {txReceipt.trace && (
-                  <SubTab active={replayTab === "flow"} onClick={() => setReplayTab("flow")}>
-                    Money Flow
-                  </SubTab>
-                )}
-                {txReceipt.stateDiff && (
-                  <SubTab active={replayTab === "state"} onClick={() => setReplayTab("state")}>
-                    State Changes
-                  </SubTab>
-                )}
-                {calldataInitial && (
-                  <SubTab active={replayTab === "resim"} onClick={() => setReplayTab("resim")}>
-                    Re-simulate
-                  </SubTab>
-                )}
-              </div>
+              <ReplayTabs
+                receipt={txReceipt}
+                hasCalldata={!!calldataInitial}
+                activeTab={replayTab}
+                onTabChange={setReplayTab}
+              />
 
               {replayTab === "receipt" && (
                 <TxReceiptPanel receipt={txReceipt} book={addressBook} />
@@ -222,7 +204,7 @@ export default function App() {
               )}
 
               {replayTab === "flow" && txReceipt.trace && (
-                <MoneyFlow trace={txReceipt.trace} logs={txReceipt.logs} book={addressBook} />
+                <MoneyFlow trace={txReceipt.trace} logs={txReceipt.logs} book={addressBook} client={client} />
               )}
 
               {replayTab === "state" && txReceipt.stateDiff && (
@@ -247,7 +229,7 @@ export default function App() {
                   <ResultPanel result={replayResult} error={replayError} />
                   {replayResult?.trace && <CallTrace trace={replayResult.trace} book={addressBook} />}
                   {replayResult?.trace && (
-                    <MoneyFlow trace={replayResult.trace} logs={replayResult.logs} book={addressBook} />
+                    <MoneyFlow trace={replayResult.trace} logs={replayResult.logs} book={addressBook} client={client} />
                   )}
                 </div>
               )}
@@ -358,7 +340,7 @@ export default function App() {
               <ResultPanel result={result} error={callError} />
               {result?.trace && <CallTrace trace={result.trace} book={addressBook} />}
               {result?.trace && (
-                <MoneyFlow trace={result.trace} logs={result.logs} book={addressBook} />
+                <MoneyFlow trace={result.trace} logs={result.logs} book={addressBook} client={client} />
               )}
             </>
           )}
@@ -400,14 +382,147 @@ function NavButton({
   );
 }
 
-function SubTab({
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+function countValueTransfers(receipt: TxReceipt): number {
+  let count = 0;
+
+  function walkTrace(t: import("./lib/trace").TraceCall) {
+    if (BigInt(t.value) > 0n && t.type !== "DELEGATECALL") count++;
+    if (t.calls) for (const c of t.calls) walkTrace(c);
+  }
+  if (receipt.trace) walkTrace(receipt.trace);
+
+  for (const log of receipt.logs) {
+    const isDecodedTransfer = (log.eventName === "Transfer" || log.eventName.startsWith("Transfer("))
+      && log.args.from && log.args.to
+      && (log.args.value !== undefined || log.args.amount !== undefined);
+    if (isDecodedTransfer) { count++; continue; }
+
+    const topic0 = log.raw.topics[0];
+    if (topic0?.toLowerCase() === TRANSFER_TOPIC && log.raw.topics.length >= 3) {
+      try { if (BigInt(log.raw.data) > 0n) count++; } catch { /* skip */ }
+    }
+  }
+  return count;
+}
+
+function ReplayTabs({
+  receipt,
+  hasCalldata,
+  activeTab,
+  onTabChange,
+}: {
+  receipt: TxReceipt;
+  hasCalldata: boolean;
+  activeTab: ReplayTab;
+  onTabChange: (tab: ReplayTab) => void;
+}) {
+  const availableTabs = useMemo(() => {
+    const tabs: ReplayTab[] = ["receipt"];
+    if (receipt.trace) tabs.push("trace", "flow");
+    if (receipt.stateDiff) tabs.push("state");
+    if (hasCalldata) tabs.push("resim");
+    return tabs;
+  }, [receipt.trace, receipt.stateDiff, hasCalldata]);
+
+  const callCount = receipt.trace ? countCalls(receipt.trace) : 0;
+  const transferCount = countValueTransfers(receipt);
+  const stateCount = receipt.stateDiff
+    ? new Set([...Object.keys(receipt.stateDiff.pre), ...Object.keys(receipt.stateDiff.post)]).size
+    : 0;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const idx = availableTabs.indexOf(activeTab);
+        if (idx === -1) return;
+        const next = e.key === "ArrowRight"
+          ? availableTabs[(idx + 1) % availableTabs.length]
+          : availableTabs[(idx - 1 + availableTabs.length) % availableTabs.length];
+        onTabChange(next);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTab, availableTabs, onTabChange]);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-lg bg-gray-900/80 p-1 ring-1 ring-gray-800/60">
+      <PillTab active={activeTab === "receipt"} onClick={() => onTabChange("receipt")} badge={receipt.logs.length || undefined}>
+        Receipt
+      </PillTab>
+      {receipt.trace && (
+        <PillTab active={activeTab === "trace"} onClick={() => onTabChange("trace")} badge={callCount}>
+          Trace
+        </PillTab>
+      )}
+      {receipt.trace && (
+        <PillTab active={activeTab === "flow"} onClick={() => onTabChange("flow")} badge={transferCount || undefined}>
+          Flow
+        </PillTab>
+      )}
+      {receipt.stateDiff && (
+        <PillTab active={activeTab === "state"} onClick={() => onTabChange("state")} badge={stateCount}>
+          State
+        </PillTab>
+      )}
+      {hasCalldata && (
+        <PillTab active={activeTab === "resim"} onClick={() => onTabChange("resim")}>
+          Re-sim
+        </PillTab>
+      )}
+      <span className="ml-auto pr-1.5 text-[9px] text-gray-700">← →</span>
+    </div>
+  );
+}
+
+function PillTab({
   active,
   onClick,
   children,
+  badge,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  badge?: number | string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-all ${
+        active
+          ? "bg-gray-800 text-cyan-400 shadow-sm shadow-cyan-500/10"
+          : "text-gray-500 hover:bg-gray-800/50 hover:text-gray-300"
+      }`}
+    >
+      {children}
+      {badge !== undefined && badge !== 0 && (
+        <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[9px] ${
+          active ? "bg-cyan-900/40 text-cyan-400" : "bg-gray-800 text-gray-500"
+        }`}>
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function SubTab({
+  active,
+  onClick,
+  children,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  badge?: number | string;
 }) {
   return (
     <button
@@ -419,6 +534,11 @@ function SubTab({
       }`}
     >
       {children}
+      {badge !== undefined && badge !== 0 && (
+        <span className="ml-1 rounded-full bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-400">
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
