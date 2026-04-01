@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, "Cascadia Code",
+    Menlo, Consolas, monospace;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: break-word;
+}
+
+input,
+textarea,
+select {
+  color-scheme: dark;
+  font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: inherit;
+  }
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
