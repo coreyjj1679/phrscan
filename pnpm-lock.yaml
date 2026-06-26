@@ -8,6 +8,24 @@ importers:
 
   .:
     dependencies:
+      '@ethereumjs/common':
+        specifier: ^10.1.2
+        version: 10.1.2
+      '@ethereumjs/evm':
+        specifier: ^10.1.2
+        version: 10.1.2
+      '@ethereumjs/statemanager':
+        specifier: ^10.1.2
+        version: 10.1.2
+      '@ethereumjs/util':
+        specifier: ^10.1.2
+        version: 10.1.2
+      '@fontsource-variable/geist':
+        specifier: ^5.2.9
+        version: 5.2.9
+      '@fontsource-variable/jetbrains-mono':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@tailwindcss/vite':
         specifier: ^4.2.2
         version: 4.2.2(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@24.12.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.1))
@@ -339,6 +357,39 @@ packages:
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
+  '@ethereumjs/binarytree@10.1.2':
+    resolution: {integrity: sha512-szugxzYrQHRvlhbu0BrcW/Kw7tg3K0b1HbKCdwRrFhvz80RbGfML2wqDDZhO5NyvHqWpS+Rt9q+qV9LxOHCP6w==}
+    engines: {node: '>=20'}
+
+  '@ethereumjs/common@10.1.2':
+    resolution: {integrity: sha512-whWnhqAxwpDy4zWkM6rqMzb8nioZJpiys01N57+HDyanvK5IRzodV5tdMRDt66PD5vDjl2c9K5UcB039gU2Oyw==}
+
+  '@ethereumjs/evm@10.1.2':
+    resolution: {integrity: sha512-yIslek2pcsUQwBJFeeamN529hbNYBtrSuneSCMn4AM71WAx8vntgDbzYoAJsG/whyB9wOVvzHXubju1JXmaEag==}
+    engines: {node: '>=20'}
+
+  '@ethereumjs/mpt@10.1.2':
+    resolution: {integrity: sha512-dBlXpkP1ssp+AcUxsJUrY72LZuE1JQEp1AZn5mgmbBcd2Gwkpyi57q4zATlZbxrZUxp/K9UIidgqxQWcOCbo5g==}
+    engines: {node: '>=20'}
+
+  '@ethereumjs/rlp@10.1.2':
+    resolution: {integrity: sha512-T5Zt6C2pd02Wd88Q9A5/UX+He1Q2Y1LntHxz/038tfbUMiqby4fYSSTLEDx+TEfJqw1BsJSBY/TSu6goUzlk+w==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  '@ethereumjs/statemanager@10.1.2':
+    resolution: {integrity: sha512-Pkm9VHF19wxT5c0jB+IDiQBv4W42o0wYSS1NLXeRea0D6CDBu0CLo9ihhnQgM368zXPl6JRbLS+YiG8tJkz4aA==}
+
+  '@ethereumjs/util@10.1.2':
+    resolution: {integrity: sha512-UPBgXtHHfQugoXOSAoeG3jdmPbl37cwV9y3XqTPAnw8tJj8np14TPV2uc5lOs7C2LMF9Ubn66zyaiYxgwGppng==}
+    engines: {node: '>=20'}
+
+  '@fontsource-variable/geist@5.2.9':
+    resolution: {integrity: sha512-TP+QSBG3wxKGPE33CbMy/L0Nu3qvJ6Fy81Yc4LnQ95xH+i+cfEp8fyU8/kfV14YwszxIFPhnoMTbjL71waVpyQ==}
+
+  '@fontsource-variable/jetbrains-mono@5.2.8':
+    resolution: {integrity: sha512-WBA9elru6Jdp5df2mES55wuOO0WIrn3kpXnI4+W2ek5u3ZgLS9XS4gmIlcQhiZOWEKl95meYdvK7xI+ETLCq/Q==}
+
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
     engines: {node: '>=18.18.0'}
@@ -374,6 +425,9 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@js-sdsl/ordered-map@4.4.2':
+    resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
+
   '@napi-rs/wasm-runtime@1.1.2':
     resolution: {integrity: sha512-sNXv5oLJ7ob93xkZ1XnxisYhGYXfaG9f65/ZgYuAu3qt7b3NadcOEhLvx28hv31PgX8SZJRYrAIPQilQmFpLVw==}
     peerDependencies:
@@ -388,9 +442,17 @@ packages:
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
     engines: {node: ^14.21.3 || >=16}
 
+  '@noble/curves@2.2.0':
+    resolution: {integrity: sha512-T/BoHgFXirb0ENSPBquzX0rcjXeM6Lo892a2jlYJkqk83LqZx0l1Of7DzlKJ6jkpvMrkHSnAcgb5JegL8SeIkQ==}
+    engines: {node: '>= 20.19.0'}
+
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.122.0':
     resolution: {integrity: sha512-oLAl5kBpV4w69UtFZ9xqcmTi+GENWOcPF7FCrczTiBbmC0ibXxCwyvZGbO39rCVEuLGAZM84DH0pUIyyv/YJzA==}
@@ -1111,6 +1173,10 @@ packages:
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
 
+  lru-cache@11.0.2:
+    resolution: {integrity: sha512-123qHRfJBmo2jXDbo/a5YOQrJoHF/GNQTLzQ5+IdK5pWpceK17yRc6ozlWd25FxvGKQbIUs91fDFkXmDHTKcyA==}
+    engines: {node: 20 || >=22}
+
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
 
@@ -1631,6 +1697,70 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
+  '@ethereumjs/binarytree@10.1.2':
+    dependencies:
+      '@ethereumjs/rlp': 10.1.2
+      '@ethereumjs/util': 10.1.2
+      '@noble/hashes': 2.2.0
+      debug: 4.4.3
+      lru-cache: 11.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@ethereumjs/common@10.1.2':
+    dependencies:
+      '@ethereumjs/util': 10.1.2
+      eventemitter3: 5.0.1
+
+  '@ethereumjs/evm@10.1.2':
+    dependencies:
+      '@ethereumjs/binarytree': 10.1.2
+      '@ethereumjs/common': 10.1.2
+      '@ethereumjs/statemanager': 10.1.2
+      '@ethereumjs/util': 10.1.2
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      debug: 4.4.3
+      eventemitter3: 5.0.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@ethereumjs/mpt@10.1.2':
+    dependencies:
+      '@ethereumjs/rlp': 10.1.2
+      '@ethereumjs/util': 10.1.2
+      '@noble/hashes': 2.2.0
+      debug: 4.4.3
+      lru-cache: 11.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@ethereumjs/rlp@10.1.2': {}
+
+  '@ethereumjs/statemanager@10.1.2':
+    dependencies:
+      '@ethereumjs/binarytree': 10.1.2
+      '@ethereumjs/common': 10.1.2
+      '@ethereumjs/mpt': 10.1.2
+      '@ethereumjs/rlp': 10.1.2
+      '@ethereumjs/util': 10.1.2
+      '@js-sdsl/ordered-map': 4.4.2
+      '@noble/hashes': 2.2.0
+      debug: 4.4.3
+      lru-cache: 11.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@ethereumjs/util@10.1.2':
+    dependencies:
+      '@ethereumjs/rlp': 10.1.2
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+
+  '@fontsource-variable/geist@5.2.9': {}
+
+  '@fontsource-variable/jetbrains-mono@5.2.8': {}
+
   '@humanfs/core@0.19.1': {}
 
   '@humanfs/node@0.16.7':
@@ -1667,6 +1797,8 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@js-sdsl/ordered-map@4.4.2': {}
+
   '@napi-rs/wasm-runtime@1.1.2(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)':
     dependencies:
       '@emnapi/core': 1.9.1
@@ -1680,7 +1812,13 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
+  '@noble/curves@2.2.0':
+    dependencies:
+      '@noble/hashes': 2.2.0
+
   '@noble/hashes@1.8.0': {}
+
+  '@noble/hashes@2.2.0': {}
 
   '@oxc-project/types@0.122.0': {}
 
@@ -2309,6 +2447,8 @@ snapshots:
       p-locate: 5.0.0
 
   lodash.merge@4.6.2: {}
+
+  lru-cache@11.0.2: {}
 
   lru-cache@5.1.1:
     dependencies:
