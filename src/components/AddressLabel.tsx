@@ -1,14 +1,18 @@
 import { useState, useRef, useEffect } from "react";
 import type { AddressBook } from "../hooks/useAddressBook";
 import { EXPLORER_URL } from "../config/chain";
+import { useAddressMenu } from "../hooks/useAddressMenu";
 
 type Props = {
   address: string;
   book: AddressBook;
   className?: string;
+  /** Render the full address instead of the truncated 0x1234…abcd form. */
+  full?: boolean;
 };
 
-export function AddressLabel({ address, book, className = "" }: Props) {
+export function AddressLabel({ address, book, className = "", full = false }: Props) {
+  const { open } = useAddressMenu();
   const label = book.resolve(address);
   const [showSave, setShowSave] = useState(false);
   const [input, setInput] = useState(label ?? "");
@@ -40,14 +44,14 @@ export function AddressLabel({ address, book, className = "" }: Props) {
     setShowSave(false);
   };
 
-  const short = address.length >= 10
+  const short = !full && address.length >= 10
     ? address.slice(0, 6) + "…" + address.slice(-4)
     : address;
 
   return (
     <span className={`relative inline-flex items-center gap-1 ${className}`}>
       <span
-        className={`cursor-pointer font-mono text-[11px] ${
+        className={`cursor-pointer font-mono text-xs ${
           label
             ? "rounded bg-cyan-900/30 px-1 py-0.5 text-cyan-300"
             : "text-gray-500"
@@ -57,6 +61,11 @@ export function AddressLabel({ address, book, className = "" }: Props) {
           e.stopPropagation();
           setInput(label ?? "");
           setShowSave(true);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          open(address, e.clientX, e.clientY);
         }}
       >
         {label ?? short}
@@ -94,7 +103,7 @@ export function AddressLabel({ address, book, className = "" }: Props) {
           />
           <button
             onClick={handleSave}
-            className="rounded bg-cyan-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-cyan-600"
+            className="rounded bg-cyan-700 px-2 py-1 text-xs font-medium text-on-accent hover:bg-cyan-600"
           >
             Save
           </button>
@@ -104,9 +113,12 @@ export function AddressLabel({ address, book, className = "" }: Props) {
                 book.remove(address);
                 setShowSave(false);
               }}
-              className="rounded px-1.5 py-1 text-[10px] text-red-400 hover:bg-red-900/50"
+              aria-label="Remove label"
+              className="rounded px-1.5 py-1 text-red-400 hover:bg-red-900/50"
             >
-              ✕
+              <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
             </button>
           )}
         </div>

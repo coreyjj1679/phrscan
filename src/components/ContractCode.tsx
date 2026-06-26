@@ -96,7 +96,7 @@ export function ContractCode({ address, client }: Props) {
               <button
                 key={i}
                 onClick={() => setActiveFile(i)}
-                className={`rounded px-2 py-0.5 font-mono text-[11px] transition ${
+                className={`rounded px-2 py-0.5 font-mono text-xs transition ${
                   i === activeFile
                     ? "bg-gray-700 text-gray-200"
                     : "text-gray-500 hover:text-gray-300"
@@ -109,7 +109,7 @@ export function ContractCode({ address, client }: Props) {
         )}
 
         <div className="max-h-[60vh] overflow-auto rounded bg-gray-950 ring-1 ring-gray-800 sm:max-h-[500px]">
-          <pre className="p-3 font-mono text-[11px] leading-relaxed text-gray-300 sm:p-4 sm:text-xs">
+          <pre className="p-3 font-mono text-xs leading-relaxed text-gray-300 sm:p-4 sm:text-xs">
             <code>{files[activeFile]?.code}</code>
           </pre>
         </div>
@@ -129,7 +129,7 @@ export function ContractCode({ address, client }: Props) {
           </span>
         </div>
         <div className="max-h-[50vh] overflow-auto rounded bg-gray-950 ring-1 ring-gray-800 sm:max-h-[300px]">
-          <pre className="break-all p-3 font-mono text-[11px] leading-relaxed text-gray-500 sm:p-4">
+          <pre className="break-all p-3 font-mono text-xs leading-relaxed text-gray-500 sm:p-4">
             {bytecode}
           </pre>
         </div>

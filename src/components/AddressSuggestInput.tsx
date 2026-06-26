@@ -106,7 +106,7 @@ export function AddressSuggestInput({
               className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700/60"
             >
               <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                   entry.isContract
                     ? "bg-violet-900/40 text-violet-300"
                     : "bg-cyan-900/30 text-cyan-300"
@@ -114,7 +114,7 @@ export function AddressSuggestInput({
               >
                 {entry.label}
               </span>
-              <span className="truncate font-mono text-[10px] text-gray-500">
+              <span className="truncate font-mono text-xs text-gray-500">
                 {entry.address}
               </span>
             </button>

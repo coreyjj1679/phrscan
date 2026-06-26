@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Abi, PublicClient, Address } from "viem";
 import { isAddress } from "viem";
-import { type AbiFunction, isReadFunction } from "../lib/abi";
+import { type AbiFunction, isReadFunction, fnKey } from "../lib/abi";
 import { readOrSimulate, type CallResult } from "../lib/simulate";
 import {
   getSavedCalls,
@@ -10,6 +10,18 @@ import {
   type SavedCall,
 } from "../lib/storage";
 import { AddressSuggestInput } from "./AddressSuggestInput";
+import { valueToWei, safeValueToWei, type ValueUnit } from "../lib/units";
+import { CURRENCY, ACTIVE_NETWORK } from "../config/chain";
+import { castCall } from "../lib/cast";
+import { OverridesEditor } from "./OverridesEditor";
+import { CopyButton } from "./CopyButton";
+import {
+  emptyOverrides,
+  hasOverrides,
+  buildOverrides,
+  type SimOverrides,
+  type BuiltOverrides,
+} from "../lib/overrides";
 import type { AddressBook } from "../hooks/useAddressBook";
 
 type Props = {
@@ -21,9 +33,10 @@ type Props = {
   initialCall?: SavedCall | null;
   book?: AddressBook;
   addressBookSuggest?: boolean;
+  rpcUrl?: string;
 };
 
-export function FunctionForm({ fn, abi, address, client, onResult, initialCall, book, addressBookSuggest = false }: Props) {
+export function FunctionForm({ fn, abi, address, client, onResult, initialCall, book, addressBookSuggest = false, rpcUrl = ACTIVE_NETWORK.rpc }: Props) {
   const [args, setArgs] = useState<string[]>(
     initialCall?.functionName === fn.name && initialCall.args.length === fn.inputs.length
       ? initialCall.args
@@ -34,6 +47,9 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
   const [useCustomBlock, setUseCustomBlock] = useState(initialCall?.useCustomBlock ?? false);
   const [value, setValue] = useState(initialCall?.value ?? "");
   const [showValue, setShowValue] = useState(!!(initialCall?.value));
+  const [valueUnit, setValueUnit] = useState<ValueUnit>("wei");
+  const [showOverrides, setShowOverrides] = useState(false);
+  const [overrides, setOverrides] = useState<SimOverrides>(() => emptyOverrides());
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<(string | null)[]>(fn.inputs.map(() => null));
   const [fromError, setFromError] = useState<string | null>(null);
@@ -56,9 +72,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
     );
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const submit = async () => {
     const newErrors = fn.inputs.map((input, i) => validateArg(input.type, args[i]));
     const newFromError = !isRead && from.trim() ? validateArg("address", from) : null;
     setErrors(newErrors);
@@ -70,10 +84,16 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
 
     try {
       const parsedArgs = fn.inputs.map((input, i) => parseArg(input.type, args[i]));
-      const opts: { from?: Address; blockNumber?: bigint; value?: bigint } = {};
+      const opts: {
+        from?: Address;
+        blockNumber?: bigint;
+        value?: bigint;
+        overrides?: BuiltOverrides;
+      } = {};
       if (!isRead && from.trim()) opts.from = from.trim() as Address;
       if (useCustomBlock && blockNumber.trim()) opts.blockNumber = BigInt(blockNumber.trim());
-      if (showValue && value.trim()) opts.value = BigInt(value.trim());
+      if (showValue && value.trim()) opts.value = valueToWei(value, valueUnit);
+      if (showOverrides && hasOverrides(overrides)) opts.overrides = buildOverrides(overrides);
 
       const result = await readOrSimulate(
         client,
@@ -92,6 +112,22 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
     }
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submit();
+  };
+
+  // Auto-read zero-arg view functions on selection (no click needed).
+  const autoRead = useRef(false);
+  useEffect(() => {
+    if (autoRead.current) return;
+    if (isRead && fn.inputs.length === 0) {
+      autoRead.current = true;
+      void Promise.resolve().then(() => submit());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSave = () => {
     const label = saveLabel.trim() || `${fn.name}(…)`;
     const call: SavedCall = {
@@ -101,7 +137,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
       functionName: fn.name,
       args,
       from,
-      value,
+      value: showValue && value.trim() ? safeValueToWei(value, valueUnit) : value,
       blockNumber,
       useCustomBlock,
       mode: "function",
@@ -128,12 +164,22 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
     refreshSaved();
   };
 
+  const castCmd = castCall({
+    to: address,
+    sig: fnKey(fn),
+    args,
+    from: !isRead && from.trim() ? from.trim() : undefined,
+    value: showValue && value.trim() ? safeValueToWei(value, valueUnit) : undefined,
+    block: useCustomBlock && blockNumber.trim() ? blockNumber.trim() : undefined,
+    rpc: rpcUrl,
+  });
+
   return (
     <form onSubmit={handleSubmit} className="space-y-3 rounded bg-gray-900/50 p-3 sm:p-4">
       <div className="flex items-center gap-2">
         <h3 className="font-mono text-sm font-semibold text-gray-200">{fn.name}</h3>
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+          className={`rounded px-1.5 py-0.5 text-xs font-bold uppercase ${
             isRead
               ? "bg-green-900/50 text-green-400"
               : "bg-amber-900/50 text-amber-400"
@@ -145,7 +191,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
 
       {savedCalls.length > 0 && (
         <div>
-          <p className="mb-1 text-[11px] font-medium text-gray-500">Saved calls</p>
+          <p className="mb-1 text-xs font-medium text-gray-500">Saved calls</p>
           <div className="flex flex-wrap gap-1.5">
             {savedCalls.map((c) => (
               <div
@@ -158,9 +204,12 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
                 <button
                   type="button"
                   onClick={(e) => handleDeleteCall(c.id, e)}
-                  className="ml-0.5 hidden text-gray-600 hover:text-red-400 group-hover:inline"
+                  aria-label="Delete saved call"
+                  className="ml-0.5 hidden text-gray-600 hover:text-red-400 group-hover:inline-flex"
                 >
-                  ✕
+                  <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" />
+                  </svg>
                 </button>
               </div>
             ))}
@@ -230,7 +279,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
             />
           )}
           {errors[i] && (
-            <p className="mt-1 text-[11px] text-red-400">{errors[i]}</p>
+            <p className="mt-1 text-xs text-red-400">{errors[i]}</p>
           )}
         </div>
       ))}
@@ -258,7 +307,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
             />
           )}
           {fromError && (
-            <p className="mt-1 text-[11px] text-red-400">{fromError}</p>
+            <p className="mt-1 text-xs text-red-400">{fromError}</p>
           )}
         </div>
       )}
@@ -288,6 +337,15 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
           />
           Send value
         </label>
+        <label className="flex items-center gap-2 text-xs text-gray-400">
+          <input
+            type="checkbox"
+            checked={showOverrides}
+            onChange={(e) => setShowOverrides(e.target.checked)}
+            className="size-3.5 rounded border-gray-600 bg-gray-900"
+          />
+          State overrides
+        </label>
       </div>
 
       {useCustomBlock && (
@@ -303,19 +361,33 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
 
       {showValue && (
         <div>
-          <label className="mb-1 block text-xs text-gray-400">Value (wei)</label>
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="0"
-            spellCheck={false}
-            className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
-          />
+          <label className="mb-1 block text-xs text-gray-400">Value</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="0"
+              spellCheck={false}
+              className="w-full rounded bg-gray-900 px-3 py-1.5 font-mono text-xs text-gray-200 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            />
+            <select
+              value={valueUnit}
+              onChange={(e) => setValueUnit(e.target.value as ValueUnit)}
+              aria-label="Value unit"
+              className="shrink-0 rounded bg-gray-900 px-2 py-1.5 text-xs text-gray-300 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+            >
+              <option value="wei">wei</option>
+              <option value="gwei">gwei</option>
+              <option value="ether">{CURRENCY}</option>
+            </select>
+          </div>
         </div>
       )}
 
-      <div className="flex gap-2">
+      {showOverrides && <OverridesEditor value={overrides} onChange={setOverrides} />}
+
+      <div className="flex items-center gap-2">
         <button
           type="submit"
           disabled={loading}
@@ -338,6 +410,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
             Save
           </button>
         )}
+        <CopyButton text={castCmd} label="Copy as cast" className="ml-1" />
       </div>
 
       {showSaveForm && (
@@ -359,7 +432,7 @@ export function FunctionForm({ fn, abi, address, client, onResult, initialCall, 
             <button
               type="button"
               onClick={handleSave}
-              className="flex-1 rounded bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-600 sm:flex-none"
+              className="flex-1 rounded bg-cyan-700 px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-cyan-600 sm:flex-none"
             >
               Save
             </button>

@@ -1,8 +1,225 @@
 @import "tailwindcss";
 
+/* ─────────────────────────────────────────────────────────────
+   Beacon — Pharos Mini Explorer design tokens.
+
+   The brand metaphor is the Pharos lighthouse: a single warm gold
+   "signal beam" over deep harbor-night ink. We remap Tailwind's
+   default color scales to the Beacon palette so the whole app
+   retints from one place, and override the same CSS variables under
+   [data-theme="light"] for runtime light/dark switching.
+
+   Shades are tuned by ROLE, not by literal lightness, so the same
+   class works in both themes:
+     - 300/400  → text & icons          (legible on the page bg)
+     - 600/700  → solid fills (buttons) (legible with light text)
+     - 800      → hairline rings
+     - 900/950  → tinted chip backgrounds
+   ───────────────────────────────────────────────────────────── */
+
 @theme {
-  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, "Cascadia Code",
-    Menlo, Consolas, monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Neutrals — harbor ink (dark) */
+  --color-gray-50: #f3f6f9;
+  --color-gray-100: #e8edf2;
+  --color-gray-200: #d5dce3;
+  --color-gray-300: #bac3cd;
+  --color-gray-400: #98a4b2;
+  --color-gray-500: #6b7787;
+  --color-gray-600: #3e4955;
+  --color-gray-700: #2b3540;
+  --color-gray-800: #1e2731;
+  --color-gray-900: #151b23;
+  --color-gray-950: #0d1117;
+
+  /* Accent — beam gold (cyan slot) */
+  --color-cyan-300: #f3c56c;
+  --color-cyan-400: #eab04c;
+  --color-cyan-500: #e0a53c;
+  --color-cyan-600: #d99e33;
+  --color-cyan-700: #e3a93c;
+  --color-cyan-800: #7a5a12;
+  --color-cyan-900: #5a4212;
+
+  /* Success — green / emerald */
+  --color-green-400: #46c285;
+  --color-green-500: #36b373;
+  --color-green-600: #239a5c;
+  --color-green-700: #1b7a4b;
+  --color-green-800: #1c5f3e;
+  --color-green-900: #123b27;
+  --color-green-950: #0c2a1b;
+  --color-emerald-400: #46c285;
+  --color-emerald-800: #1c5f3e;
+  --color-emerald-900: #123b27;
+
+  /* Warning — write/caution orange (amber slot) */
+  --color-amber-400: #ef9a52;
+  --color-amber-600: #ba661f;
+  --color-amber-700: #b05e1e;
+  --color-amber-800: #6e4318;
+  --color-amber-900: #4a2b10;
+
+  /* Value / native currency — money gold (yellow slot) */
+  --color-yellow-400: #ecb54e;
+  --color-yellow-500: #e0a63c;
+  --color-yellow-600: #d69b2e;
+  --color-yellow-900: #443410;
+
+  /* Danger — red */
+  --color-red-300: #f4a7b0;
+  --color-red-400: #ee7282;
+  --color-red-500: #e5556b;
+  --color-red-600: #d6435a;
+  --color-red-800: #6e2230;
+  --color-red-900: #4a1620;
+  --color-red-950: #2e0d13;
+
+  /* Info / staticcall — steel blue */
+  --color-blue-400: #5e9bd8;
+  --color-blue-700: #2e72b8;
+  --color-blue-800: #244e78;
+  --color-blue-900: #142a40;
+
+  /* Categorical — events / delegatecall amethyst (violet + purple slots) */
+  --color-violet-300: #c8bcea;
+  --color-violet-400: #ae9bdd;
+  --color-violet-600: #6655b5;
+  --color-violet-700: #5a48a8;
+  --color-violet-900: #2c2548;
+  --color-purple-400: #ae9bdd;
+  --color-purple-600: #6655b5;
+  --color-purple-700: #5a48a8;
+  --color-purple-800: #443b72;
+  --color-purple-900: #2c2548;
+
+  /* "from" role tint */
+  --color-orange-400: #d98a52;
+
+  /* ── Semantic aliases (prefer these in new code) ── */
+  --color-ink: #0d1117;
+  --color-surface: #151b23;
+  --color-inset: #0b0f14;
+  --color-elevated: #1e2731;
+  --color-border: #2b3540;
+  --color-fg: #e8edf2;
+  --color-fg-muted: #98a4b2;
+  --color-fg-faint: #6b7787;
+  --color-fg-dim: #3e4955;
+  --color-accent: #eab04c;
+  --color-accent-hover: #f3c56c;
+  --color-on-accent: #20160a;
+  --color-success: #46c285;
+  --color-danger: #ee7282;
+  --color-warning: #ef9a52;
+  --color-info: #5e9bd8;
+  --color-beacon: #ae9bdd;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* ── Light theme — invert neutrals (by role) + flip color tints ── */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Neutrals */
+  --color-gray-50: #0f151b;
+  --color-gray-100: #18202a;
+  --color-gray-200: #29323b;
+  --color-gray-300: #3c4651;
+  --color-gray-400: #515b66;
+  --color-gray-500: #6a7480;
+  --color-gray-600: #8a94a0;
+  --color-gray-700: #c5ccd4;
+  --color-gray-800: #e2e6eb;
+  --color-gray-900: #ffffff;
+  --color-gray-950: #f5f6f8;
+
+  /* Accent — beam gold */
+  --color-cyan-300: #7a5a12;
+  --color-cyan-400: #8a6410;
+  --color-cyan-500: #b5832a;
+  --color-cyan-600: #b5832a;
+  --color-cyan-700: #e3a93c;
+  --color-cyan-800: #cda64a;
+  --color-cyan-900: #f4e7c4;
+
+  /* Success */
+  --color-green-400: #1c7a48;
+  --color-green-500: #1f8a52;
+  --color-green-600: #1c8a52;
+  --color-green-700: #15703f;
+  --color-green-800: #bfe6cf;
+  --color-green-900: #d6f0e0;
+  --color-green-950: #e2f3e9;
+  --color-emerald-400: #1c7a48;
+  --color-emerald-800: #bfe6cf;
+  --color-emerald-900: #d6f0e0;
+
+  /* Warning */
+  --color-amber-400: #b5611c;
+  --color-amber-600: #b05e1e;
+  --color-amber-700: #9c5118;
+  --color-amber-800: #f0d2b0;
+  --color-amber-900: #f7e2cc;
+
+  /* Value gold */
+  --color-yellow-400: #9a6b12;
+  --color-yellow-500: #b5832a;
+  --color-yellow-600: #8a6410;
+  --color-yellow-900: #f4e7c4;
+
+  /* Danger */
+  --color-red-300: #c0303f;
+  --color-red-400: #ce2f44;
+  --color-red-500: #d6293f;
+  --color-red-600: #c42339;
+  --color-red-800: #f2c4cb;
+  --color-red-900: #f7d6db;
+  --color-red-950: #fbe6e9;
+
+  /* Info */
+  --color-blue-400: #2e72b8;
+  --color-blue-700: #2a66a8;
+  --color-blue-800: #c2d6ec;
+  --color-blue-900: #d9e6f4;
+
+  /* Categorical amethyst */
+  --color-violet-300: #7e6cbf;
+  --color-violet-400: #6a57b0;
+  --color-violet-600: #5a48a8;
+  --color-violet-700: #4f3f98;
+  --color-violet-900: #e7e1f5;
+  --color-purple-400: #6a57b0;
+  --color-purple-600: #5a48a8;
+  --color-purple-700: #4f3f98;
+  --color-purple-800: #d8d0ee;
+  --color-purple-900: #e7e1f5;
+
+  --color-orange-400: #b5611c;
+
+  /* Semantic aliases */
+  --color-ink: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-inset: #eef1f4;
+  --color-elevated: #e6e9ee;
+  --color-border: #d3d9e0;
+  --color-fg: #18202a;
+  --color-fg-muted: #515b66;
+  --color-fg-faint: #6a7480;
+  --color-fg-dim: #8a94a0;
+  --color-accent: #e3a93c;
+  --color-accent-hover: #efba57;
+  --color-on-accent: #20160a;
+  --color-success: #1c7a48;
+  --color-danger: #ce2f44;
+  --color-warning: #b5611c;
+  --color-info: #2e72b8;
+  --color-beacon: #6a57b0;
 }
 
 html {
@@ -10,7 +227,10 @@ html {
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-ink);
+  color: var(--color-fg);
   -webkit-font-smoothing: antialiased;
   overflow-wrap: break-word;
 }
@@ -18,7 +238,6 @@ body {
 input,
 textarea,
 select {
-  color-scheme: dark;
   font-size: 16px;
 }
 

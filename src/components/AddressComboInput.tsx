@@ -106,7 +106,7 @@ export function AddressComboInput({
               className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700/60"
             >
               <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                   entry.isContract
                     ? "bg-violet-900/40 text-violet-300"
                     : "bg-cyan-900/30 text-cyan-300"
@@ -115,11 +115,11 @@ export function AddressComboInput({
                 {entry.label}
               </span>
               {entry.isContract && (
-                <span className="rounded bg-violet-900/40 px-1 py-0.5 text-[9px] font-medium text-violet-400">
+                <span className="rounded bg-violet-900/40 px-1 py-0.5 text-xs font-medium text-violet-400">
                   contract
                 </span>
               )}
-              <span className="truncate font-mono text-[10px] text-gray-500">
+              <span className="truncate font-mono text-xs text-gray-500">
                 {entry.address}
               </span>
             </button>

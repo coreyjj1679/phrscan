@@ -12,6 +12,9 @@ import {
   updateContractAbi as updateContractAbiStorage,
   saveAbi as saveAbiStorage,
   deleteAbi as deleteAbiStorage,
+  getAutoLabels,
+  setAutoLabel as setAutoLabelStorage,
+  clearAutoLabels,
 } from "../lib/storage";
 
 export function useAddressBook() {
@@ -21,6 +24,7 @@ export function useAddressBook() {
 
   const addresses = getSavedAddresses();
   const contracts = getSavedContracts();
+  const autoLabels = getAutoLabels();
 
   const resolve = useCallback(
     (addr: string): string | undefined => {
@@ -33,9 +37,10 @@ export function useAddressBook() {
       const contractMatch = contracts.find(
         (c) => c.address.toLowerCase() === lc,
       );
-      return contractMatch?.label;
+      if (contractMatch) return contractMatch.label;
+      return autoLabels.get(lc);
     },
-    [version, addresses, contracts],
+    [version, addresses, contracts, autoLabels],
   );
 
   const save = useCallback(
@@ -131,6 +136,15 @@ export function useAddressBook() {
     [],
   );
 
+  const addContract = useCallback(
+    (address: string, label: string, abi: Abi) => {
+      saveContract({ address, label, abi, savedAt: Date.now() });
+      saveAbiStorage(address, abi);
+      bump();
+    },
+    [],
+  );
+
   const removeContract = useCallback(
     (address: string) => {
       deleteContract(address);
@@ -138,6 +152,22 @@ export function useAddressBook() {
     },
     [],
   );
+
+  const setAutoLabels = useCallback(
+    (entries: { address: string; label: string }[]) => {
+      let changed = false;
+      for (const e of entries) {
+        if (setAutoLabelStorage(e.address, e.label)) changed = true;
+      }
+      if (changed) bump();
+    },
+    [],
+  );
+
+  const clearAuto = useCallback(() => {
+    clearAutoLabels();
+    bump();
+  }, []);
 
   return {
     addresses,
@@ -153,7 +183,11 @@ export function useAddressBook() {
     renameContract,
     updateContract,
     updateContractAbi,
+    addContract,
     removeContract,
+    autoLabels,
+    setAutoLabels,
+    clearAuto,
     version,
   };
 }

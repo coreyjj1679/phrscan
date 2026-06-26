@@ -2,7 +2,10 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { formatEther, formatUnits, type PublicClient, type Address } from "viem";
 import type { TraceCall } from "../lib/trace";
 import type { DecodedLog } from "../lib/simulate";
+import { downloadJson } from "../lib/download";
+import { CURRENCY } from "../config/chain";
 import type { AddressBook } from "../hooks/useAddressBook";
+import { useAddressMenu } from "../hooks/useAddressMenu";
 
 type Props = {
   trace: TraceCall;
@@ -31,7 +34,7 @@ function extractNativeTransfers(trace: TraceCall, transfers: Transfer[], counter
       from: trace.from.toLowerCase(),
       to: trace.to.toLowerCase(),
       amount: val,
-      symbol: "PHRS",
+      symbol: CURRENCY,
       decimals: 18,
       tokenAddress: "",
       logIndex: "trace",
@@ -445,6 +448,18 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
 
   const tokenMeta = useTokenMeta(client, contractAddresses);
 
+  // Promote fetched token symbols into global auto-labels.
+  useEffect(() => {
+    const entries: { address: string; label: string }[] = [];
+    for (const [addr, m] of tokenMeta) {
+      if (m.symbol && m.symbol !== shortAddr(addr)) {
+        entries.push({ address: addr, label: m.symbol });
+      }
+    }
+    if (entries.length) void Promise.resolve().then(() => book.setAutoLabels(entries));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenMeta]);
+
   const transfers = useMemo(() => {
     return rawTransfers.map((t) => {
       if (!t.tokenAddress) return t;
@@ -512,6 +527,7 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const handlePointerDown = useCallback((e: React.PointerEvent, nodeId: string) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     (e.target as SVGElement).setPointerCapture(e.pointerId);
     const pos = nodePositions.get(nodeId);
@@ -552,7 +568,7 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
 
   if (transfers.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4" ref={containerRef}>
+      <div className="rounded-lg border border-border bg-surface p-3 sm:p-4" ref={containerRef}>
         <h3 className="text-sm font-semibold text-gray-100">Money Flow</h3>
         <p className="mt-2 text-xs text-gray-500">No value transfers detected in this transaction.</p>
       </div>
@@ -560,17 +576,23 @@ export function MoneyFlow({ trace, logs, book, client }: Props) {
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4" ref={containerRef}>
+    <div className="space-y-3 rounded-lg border border-border bg-surface p-3 sm:p-4" ref={containerRef}>
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold text-gray-100">Money Flow</h3>
-        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-400">{transfers.length} transfers</span>
+        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs font-medium text-gray-400">{transfers.length} transfers</span>
+        <button
+          onClick={() => downloadJson("transfers.json", transfers)}
+          className="text-xs text-gray-500 transition-colors hover:text-gray-300"
+        >
+          Export
+        </button>
         <button
           onClick={handleReset}
-          className="rounded-md bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400 transition-colors hover:bg-gray-700 hover:text-gray-200"
+          className="rounded-md bg-gray-800 px-2 py-0.5 text-xs text-gray-400 transition-colors hover:bg-gray-700 hover:text-gray-200"
         >
           Reset layout
         </button>
-        <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-gray-500 select-none">
+        <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-xs text-gray-500 select-none">
           <input
             type="checkbox"
             checked={useLabels}
@@ -657,6 +679,7 @@ function FlowNode({ node, useLabels, w, h, onPointerDown, isDragging }: {
   onPointerDown: (e: React.PointerEvent, nodeId: string) => void;
   isDragging: boolean;
 }) {
+  const { open } = useAddressMenu();
   const display = useLabels && node.label
     ? node.label
     : shortAddr(node.id);
@@ -666,6 +689,11 @@ function FlowNode({ node, useLabels, w, h, onPointerDown, isDragging }: {
     <g
       style={{ cursor: isDragging ? "grabbing" : "grab" }}
       onPointerDown={(e) => onPointerDown(e, node.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        open(node.id, e.clientX, e.clientY);
+      }}
     >
       <rect
         x={node.x - w / 2}
@@ -699,7 +727,7 @@ function FlowEdge({ edge, highlighted, dimmed }: {
   dimmed: boolean;
 }) {
   const { from, to, transfer, edgeGroupIndex, edgeGroupSize } = edge;
-  const isNative = transfer.symbol === "PHRS";
+  const isNative = transfer.symbol === CURRENCY;
   const baseColor = isNative ? "#ca8a04" : "#8b5cf6";
   const color = highlighted ? "#22d3ee" : baseColor;
   const markerId = highlighted ? "arrowhead-highlight" : isNative ? "arrowhead-yellow" : "arrowhead-violet";
@@ -823,6 +851,7 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
   hoveredIdx: number | null;
   onHover: (idx: number | null) => void;
 }) {
+  const { open } = useAddressMenu();
   const [copied, setCopied] = useState<string | null>(null);
 
   const resolveDisplay = (addr: string) => {
@@ -835,7 +864,7 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-[11px]">
+      <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-gray-800 text-left text-gray-500">
             <th className="px-2 py-1 font-medium">Index</th>
@@ -852,7 +881,7 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
             const logLabel = t.logIndex === "trace"
               ? `T${t.traceIndex}`
               : `L${t.logIndex}`;
-            const isNative = t.symbol === "PHRS";
+            const isNative = t.symbol === CURRENCY;
 
             return (
               <tr
@@ -862,7 +891,7 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
                 onMouseLeave={() => onHover(null)}
               >
                 <td className="px-2 py-1.5">
-                  <span className={`rounded px-1 py-0.5 font-mono text-[10px] font-bold ${
+                  <span className={`rounded px-1 py-0.5 font-mono text-xs font-bold ${
                     isNative
                       ? "bg-yellow-900/40 text-yellow-500"
                       : "bg-violet-900/40 text-violet-400"
@@ -880,6 +909,11 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
                           : "text-gray-400 hover:text-gray-200"
                     }`}
                     title={t.from}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      open(t.from, e.clientX, e.clientY);
+                    }}
                     onClick={() => {
                       navigator.clipboard.writeText(t.from);
                       setCopied(t.from + i);
@@ -900,6 +934,11 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
                           : "text-gray-400 hover:text-gray-200"
                     }`}
                     title={t.to}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      open(t.to, e.clientX, e.clientY);
+                    }}
                     onClick={() => {
                       navigator.clipboard.writeText(t.to);
                       setCopied(t.to + i);
@@ -916,6 +955,11 @@ function TransferTable({ transfers, book, useLabels, hoveredIdx, onHover }: {
                     <span
                       className="cursor-pointer font-mono text-violet-400 hover:text-violet-300"
                       title={t.tokenAddress}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        open(t.tokenAddress, e.clientX, e.clientY);
+                      }}
                       onClick={() => {
                         navigator.clipboard.writeText(t.tokenAddress);
                         setCopied("tok" + i);
@@ -960,13 +1004,14 @@ function TokenList({ transfers, tokenMeta }: {
   transfers: Transfer[];
   tokenMeta: Map<string, TokenMeta>;
 }) {
+  const { open } = useAddressMenu();
   const [copied, setCopied] = useState<string | null>(null);
 
   const tokens = useMemo(() => {
     const seen = new Map<string, { tokenAddress: string; symbol: string; decimals: number; name: string }>();
     // Native
     if (transfers.some((t) => !t.tokenAddress)) {
-      seen.set("native", { tokenAddress: "", symbol: "PHRS", decimals: 18, name: "Pharos Native Token" });
+      seen.set("native", { tokenAddress: "", symbol: CURRENCY, decimals: 18, name: "Pharos Native Token" });
     }
     for (const t of transfers) {
       if (!t.tokenAddress || seen.has(t.tokenAddress)) continue;
@@ -987,7 +1032,7 @@ function TokenList({ transfers, tokenMeta }: {
     <div className="space-y-1">
       <h4 className="text-xs font-semibold text-gray-400">Tokens Involved</h4>
       <div className="overflow-x-auto">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-gray-800 text-left text-gray-500">
               <th className="px-2 py-1 font-medium">Symbol</th>
@@ -1017,6 +1062,11 @@ function TokenList({ transfers, tokenMeta }: {
                       <span
                         className="cursor-pointer font-mono text-gray-400 hover:text-gray-200"
                         title={tok.tokenAddress}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          open(tok.tokenAddress, e.clientX, e.clientY);
+                        }}
                         onClick={() => {
                           navigator.clipboard.writeText(tok.tokenAddress);
                           setCopied(tok.tokenAddress);
@@ -1054,6 +1104,7 @@ function BalanceChanges({ transfers, book, useLabels, tokenMeta }: {
   useLabels: boolean;
   tokenMeta: Map<string, TokenMeta>;
 }) {
+  const { open } = useAddressMenu();
   const entries = useMemo(() => {
     const map = new Map<string, BalanceEntry>();
     const key = (addr: string, tokenAddr: string) => `${addr}::${tokenAddr}`;
@@ -1123,8 +1174,6 @@ function BalanceChanges({ transfers, book, useLabels, tokenMeta }: {
     return shortAddr(addr);
   };
 
-  if (entries.length === 0) return null;
-
   const rows = useMemo(() => {
     const result: { address: string; entry: BalanceEntry }[] = [];
     for (const [addr, items] of grouped) {
@@ -1133,11 +1182,13 @@ function BalanceChanges({ transfers, book, useLabels, tokenMeta }: {
     return result;
   }, [grouped]);
 
+  if (entries.length === 0) return null;
+
   return (
     <div className="space-y-1">
       <h4 className="text-xs font-semibold text-gray-400">Balance Changes</h4>
       <div className="overflow-x-auto">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-gray-800 text-left text-gray-500">
               <th className="px-2 py-1 font-medium">Address</th>
@@ -1154,12 +1205,17 @@ function BalanceChanges({ transfers, book, useLabels, tokenMeta }: {
                 <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                   <td className="px-2 py-1.5">
                     <span
-                      className={`font-mono ${
+                      className={`cursor-pointer font-mono ${
                         useLabels && (book.resolve(address) || tokenMeta.get(address)?.name)
                           ? "text-cyan-300"
                           : "text-gray-400"
                       }`}
                       title={address}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        open(address, e.clientX, e.clientY);
+                      }}
                     >
                       {resolveAddr(address)}
                     </span>

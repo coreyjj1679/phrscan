@@ -1,6 +1,9 @@
 import { useState, useCallback } from "react";
 import { formatEther } from "viem";
 import type { StateDiff, AccountState } from "../lib/trace";
+import { downloadJson } from "../lib/download";
+import { CURRENCY } from "../config/chain";
+import { useAddressMenu } from "../hooks/useAddressMenu";
 import type { AddressBook } from "../hooks/useAddressBook";
 
 type Props = {
@@ -16,12 +19,18 @@ export function StateChanges({ diff, book }: Props) {
   if (addresses.length === 0) return null;
 
   return (
-    <div className="space-y-3 rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4">
+    <div className="space-y-3 rounded-lg border border-border bg-surface p-3 sm:p-4">
       <div className="flex items-center gap-2">
         <h3 className="text-sm font-semibold text-gray-100">State Changes</h3>
-        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-400">
+        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs font-medium text-gray-400">
           {addresses.length} account{addresses.length !== 1 ? "s" : ""}
         </span>
+        <button
+          onClick={() => downloadJson("state-diff.json", diff)}
+          className="ml-auto text-xs text-gray-500 transition-colors hover:text-gray-300"
+        >
+          Export
+        </button>
       </div>
       <div className="space-y-1.5">
         {addresses.map((addr) => (
@@ -113,7 +122,7 @@ function AccountDiff({
         )}
         {changedSlots.length > 0 && (
           <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
               Storage
             </p>
             {changedSlots.map((slot) => (
@@ -141,6 +150,7 @@ function CopyableAddress({
   hasLabel: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const { open } = useAddressMenu();
   const handleCopy = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -154,7 +164,7 @@ function CopyableAddress({
 
   return (
     <span
-      className={`cursor-pointer font-mono text-[11px] transition-colors ${
+      className={`cursor-pointer font-mono text-xs transition-colors ${
         copied
           ? "text-green-400"
           : hasLabel
@@ -163,6 +173,11 @@ function CopyableAddress({
       }`}
       title={copied ? "Copied!" : address}
       onClick={handleCopy}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        open(address, e.clientX, e.clientY);
+      }}
     >
       {copied ? "copied" : display}
     </span>
@@ -205,18 +220,18 @@ function StorageSlotDiff({
   return (
     <div className="rounded bg-gray-950/50 px-2 py-1.5 ring-1 ring-gray-800">
       <p
-        className="truncate font-mono text-[10px] text-gray-500"
+        className="truncate font-mono text-xs text-gray-500"
         title={slot}
       >
         slot {displaySlot}
       </p>
       <div className="mt-0.5 space-y-0.5">
         {before && before !== "0x0" && (
-          <p className="break-all font-mono text-[10px] text-red-400/60 line-through">
+          <p className="break-all font-mono text-xs text-red-400/60 line-through">
             {before}
           </p>
         )}
-        <p className="break-all font-mono text-[10px] text-green-400">
+        <p className="break-all font-mono text-xs text-green-400">
           {after ?? "0x0"}
         </p>
       </div>
@@ -239,7 +254,7 @@ function Badge({
   };
   return (
     <span
-      className={`rounded px-1 py-0.5 text-[9px] font-bold uppercase ${colors[color]}`}
+      className={`rounded px-1 py-0.5 text-xs font-bold uppercase ${colors[color]}`}
     >
       {children}
     </span>
@@ -247,9 +262,9 @@ function Badge({
 }
 
 function formatBalance(val?: string): string {
-  if (!val || val === "0x0") return "0 PHRS";
+  if (!val || val === "0x0") return `0 ${CURRENCY}`;
   try {
-    return formatEther(BigInt(val)) + " PHRS";
+    return formatEther(BigInt(val)) + " " + CURRENCY;
   } catch {
     return val;
   }

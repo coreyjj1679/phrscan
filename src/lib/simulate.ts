@@ -6,6 +6,7 @@ import {
 } from "viem";
 import type { AbiFunction } from "./abi";
 import { traceCall, type TraceCall } from "./trace";
+import type { BuiltOverrides } from "./overrides";
 
 export type DecodedLog = {
   eventName: string;
@@ -21,6 +22,13 @@ export type CallResult = {
   logs?: DecodedLog[];
   error?: string;
   trace?: TraceCall | null;
+};
+
+type CallOpts = {
+  from?: Address;
+  blockNumber?: bigint;
+  value?: bigint;
+  overrides?: BuiltOverrides;
 };
 
 function decodeLogs(rawLogs: Log[], abi: Abi | null): DecodedLog[] {
@@ -74,7 +82,7 @@ async function trySimulateCalls(
     functionName?: string;
     args?: unknown[];
   },
-  opts: { from?: Address; blockNumber?: bigint },
+  opts: { from?: Address; blockNumber?: bigint; overrides?: BuiltOverrides },
   abi: Abi | null,
 ): Promise<SimResult | null> {
   try {
@@ -93,6 +101,8 @@ async function trySimulateCalls(
     };
     if (opts.from) simOpts.account = opts.from;
     if (opts.blockNumber) simOpts.blockNumber = opts.blockNumber;
+    if (opts.overrides?.state) simOpts.stateOverrides = opts.overrides.state;
+    if (opts.overrides?.block) simOpts.blockOverrides = opts.overrides.block;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { results } = await (client as any).simulateCalls(simOpts);
@@ -127,10 +137,46 @@ export async function readOrSimulate(
   abi: Abi,
   fn: AbiFunction,
   args: unknown[],
-  opts: { from?: Address; blockNumber?: bigint; value?: bigint },
+  opts: CallOpts,
 ): Promise<CallResult> {
   const isRead = fn.stateMutability === "view" || fn.stateMutability === "pure";
   const calldata = encodeFunctionData({ abi, functionName: fn.name, args });
+  const stateOverride = opts.overrides?.state;
+  const rpcState = opts.overrides?.rpcState;
+
+  // Reconstructed read with unknown return type: surface raw return bytes
+  // instead of decoding to "void" against an empty outputs ABI.
+  if (isRead && (!fn.outputs || fn.outputs.length === 0)) {
+    try {
+      const { data } = await client.call({
+        to: address,
+        data: calldata,
+        account: opts.from,
+        blockNumber: opts.blockNumber,
+        stateOverride,
+      });
+      let gasEstimate: bigint | undefined;
+      try {
+        gasEstimate = await client.estimateGas({
+          to: address,
+          data: calldata,
+          account: opts.from,
+          blockNumber: opts.blockNumber,
+          stateOverride,
+        });
+      } catch {
+        // gas estimation may fail for view calls without a sender
+      }
+      return {
+        decoded: data && data !== "0x" ? data : undefined,
+        raw: (data ?? "0x") as Hex,
+        gasEstimate,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { decoded: undefined, raw: "0x" as Hex, error: msg };
+    }
+  }
 
   const traceParams = { from: opts.from, to: address, data: calldata, value: opts.value };
 
@@ -144,7 +190,7 @@ export async function readOrSimulate(
   if (sim) {
     let trace: TraceCall | null = null;
     if (!isRead || sim.error) {
-      trace = await traceCall(client, traceParams, opts.blockNumber);
+      trace = await traceCall(client, traceParams, opts.blockNumber, rpcState);
     }
     return {
       decoded: sim.result,
@@ -163,6 +209,7 @@ export async function readOrSimulate(
       functionName: fn.name,
       args,
       blockNumber: opts.blockNumber,
+      stateOverride,
     });
     let gasEstimate: bigint | undefined;
     try {
@@ -171,6 +218,7 @@ export async function readOrSimulate(
         data: calldata,
         account: opts.from,
         blockNumber: opts.blockNumber,
+        stateOverride,
       });
     } catch {
       // gas estimation can fail for view functions without a from address
@@ -187,12 +235,13 @@ export async function readOrSimulate(
       account: opts.from,
       blockNumber: opts.blockNumber,
       value: opts.value,
+      stateOverride,
     });
 
-    const trace = await traceCall(client, traceParams, opts.blockNumber);
+    const trace = await traceCall(client, traceParams, opts.blockNumber, rpcState);
     return { decoded: result, raw: "0x" as Hex, trace };
   } catch (err) {
-    const trace = await traceCall(client, traceParams, opts.blockNumber);
+    const trace = await traceCall(client, traceParams, opts.blockNumber, rpcState);
     const msg = err instanceof Error ? err.message : String(err);
     return { decoded: undefined, raw: "0x" as Hex, error: msg, trace };
   }
@@ -206,19 +255,22 @@ export async function rawCall(
     from?: Address;
     value?: bigint;
     blockNumber?: bigint;
+    overrides?: BuiltOverrides;
   },
   abi?: Abi | null,
 ): Promise<CallResult> {
   const traceParams = { from: opts.from, to: opts.to, data: opts.data, value: opts.value };
+  const stateOverride = opts.overrides?.state;
+  const rpcState = opts.overrides?.rpcState;
 
   const sim = await trySimulateCalls(
     client,
     { to: opts.to, data: opts.data, value: opts.value },
-    { from: opts.from, blockNumber: opts.blockNumber },
+    { from: opts.from, blockNumber: opts.blockNumber, overrides: opts.overrides },
     abi ?? null,
   );
 
-  const trace = await traceCall(client, traceParams, opts.blockNumber);
+  const trace = await traceCall(client, traceParams, opts.blockNumber, rpcState);
 
   if (sim) {
     return {
@@ -238,6 +290,7 @@ export async function rawCall(
       account: opts.from,
       value: opts.value,
       blockNumber: opts.blockNumber,
+      stateOverride,
     });
 
     let gasEstimate: bigint | undefined;
@@ -248,6 +301,7 @@ export async function rawCall(
         account: opts.from,
         value: opts.value,
         blockNumber: opts.blockNumber,
+        stateOverride,
       });
     } catch {
       // gas estimation may fail

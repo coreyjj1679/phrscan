@@ -1,4 +1,5 @@
 import type { Abi, AbiFunction, PublicClient, Address, Hex } from "viem";
+import { toFunctionSelector } from "viem";
 
 const OPENCHAIN_API =
   "https://api.openchain.xyz/signature-database/v1/lookup";
@@ -101,4 +102,79 @@ export async function buildAbiFromBytecode(
 
   if (fns.length === 0) return null;
   return { abi: fns as unknown as Abi, resolved: fns.length, total: selectors.length };
+}
+
+/**
+ * Heuristically detect read (view) functions in a reconstructed ABI by
+ * staticcalling each zero-argument function: if `eth_call` returns data
+ * without reverting, it's almost certainly a getter. State-changing calls are
+ * unaffected (eth_call never persists), so a misclassification is harmless.
+ *
+ * Only zero-arg functions can be probed (we don't know valid args for others).
+ */
+export async function probeViewFunctions(
+  client: PublicClient,
+  address: Address,
+  abi: Abi,
+): Promise<Abi> {
+  const candidates = (abi as AbiFunction[]).filter(
+    (f) =>
+      f.type === "function" &&
+      (f.inputs?.length ?? 0) === 0 &&
+      f.stateMutability !== "view" &&
+      f.stateMutability !== "pure" &&
+      f.stateMutability !== "payable",
+  );
+  if (candidates.length === 0) return abi;
+
+  const viewSelectors = new Set<string>();
+  await Promise.all(
+    candidates.slice(0, 40).map(async (f) => {
+      let selector: Hex;
+      try {
+        selector = toFunctionSelector(f);
+      } catch {
+        return;
+      }
+      try {
+        const { data } = await client.call({ to: address, data: selector });
+        if (data && data !== "0x") viewSelectors.add(selector.toLowerCase());
+      } catch {
+        // reverts or non-readable: leave classification untouched
+      }
+    }),
+  );
+
+  if (viewSelectors.size === 0) return abi;
+
+  return abi.map((item) => {
+    if (item.type === "function" && ((item as AbiFunction).inputs?.length ?? 0) === 0) {
+      try {
+        if (viewSelectors.has(toFunctionSelector(item as AbiFunction).toLowerCase())) {
+          return { ...item, stateMutability: "view" as const };
+        }
+      } catch {
+        /* keep original */
+      }
+    }
+    return item;
+  }) as Abi;
+}
+
+/** Resolve a single 4-byte selector to candidate text signatures via OpenChain. */
+export async function lookupSelectorSignatures(selector: string): Promise<string[]> {
+  const sel = selector.toLowerCase();
+  try {
+    const url = `${OPENCHAIN_API}?function=${sel}&filter=true`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const fns = json?.result?.function ?? {};
+    const matches = fns[sel] ?? fns[selector] ?? [];
+    return Array.isArray(matches)
+      ? matches.map((m: { name: string }) => m.name)
+      : [];
+  } catch {
+    return [];
+  }
 }

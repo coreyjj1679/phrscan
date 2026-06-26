@@ -1,12 +1,13 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import type { PublicClient, Hex, Address, Log, Abi } from "viem";
-import { formatEther, decodeEventLog, decodeFunctionData } from "viem";
+import { formatEther, formatGwei, decodeEventLog, decodeFunctionData } from "viem";
 import type { DecodedLog } from "../lib/simulate";
-import { fetchTrace, fetchStateDiff, type TraceCall, type StateDiff } from "../lib/trace";
+import { fetchTrace, fetchStateDiff, enrichTraceRevert, type TraceCall, type StateDiff } from "../lib/trace";
 import { AddressLabel } from "./AddressLabel";
+import { ValueView } from "./ValueView";
 import type { AddressBook } from "../hooks/useAddressBook";
 import { getAbiRegistry } from "../lib/storage";
-import { EXPLORER_URL } from "../config/chain";
+import { EXPLORER_URL, CURRENCY } from "../config/chain";
 
 export type TxData = {
   to: Address;
@@ -15,12 +16,17 @@ export type TxData = {
   value: string;
   blockNumber: string;
   hash: Hex;
+  nonce: number;
+  transactionIndex: number;
+  gasLimit: string;
 };
 
 export type TxReceipt = {
   status: "success" | "reverted";
   gasUsed: bigint;
+  effectiveGasPrice: bigint;
   blockNumber: bigint;
+  timestamp: bigint;
   logs: DecodedLog[];
   tx: TxData;
   trace: TraceCall | null;
@@ -30,17 +36,23 @@ export type TxReceipt = {
 type Props = {
   client: PublicClient;
   onTxLoaded: (tx: TxData, receipt: TxReceipt) => void;
+  initialHash?: string;
+  onLoadingChange?: (loading: boolean) => void;
+  /** Optional control rendered inline at the end of the input row (e.g. history toggle). */
+  trailing?: ReactNode;
 };
 
-export function TxReplay({ client, onTxLoaded }: Props) {
-  const [hash, setHash] = useState("");
+export function TxReplay({ client, onTxLoaded, initialHash, onLoadingChange, trailing }: Props) {
+  const [hash, setHash] = useState(initialHash ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const autoFetched = useRef(false);
 
-  const handleFetch = async () => {
-    const trimmed = hash.trim();
+  const runFetch = async (raw: string) => {
+    const trimmed = raw.trim();
     if (!trimmed) return;
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
 
     try {
@@ -61,18 +73,34 @@ export function TxReplay({ client, onTxLoaded }: Props) {
         value: tx.value.toString(),
         blockNumber: tx.blockNumber?.toString() ?? "",
         hash: tx.hash,
+        nonce: tx.nonce,
+        transactionIndex: tx.transactionIndex ?? receipt.transactionIndex ?? 0,
+        gasLimit: tx.gas.toString(),
       };
 
-      const [logs, trace, stateDiff] = await Promise.all([
+      const [logs, trace, stateDiff, block] = await Promise.all([
         decodeReceiptLogs(receipt.logs),
         fetchTrace(client, trimmed as Hex),
         fetchStateDiff(client, trimmed as Hex),
+        client.getBlock({ blockNumber: receipt.blockNumber }).catch(() => null),
       ]);
+
+      // The node's callTracer omits revert bytes; for a failed tx, recover and
+      // decode the reason by replaying it as an eth_call at its block.
+      if (trace && receipt.status !== "success") {
+        await enrichTraceRevert(client, trace, {
+          tx: { from: tx.from, to: tx.to, data: tx.input, value: tx.value },
+          blockNumber: receipt.blockNumber,
+          recover: true,
+        }).catch(() => {});
+      }
 
       const txReceipt: TxReceipt = {
         status: receipt.status === "success" ? "success" : "reverted",
         gasUsed: receipt.gasUsed,
+        effectiveGasPrice: receipt.effectiveGasPrice ?? tx.gasPrice ?? 0n,
         blockNumber: receipt.blockNumber,
+        timestamp: block?.timestamp ?? 0n,
         logs,
         tx: txData,
         trace,
@@ -84,12 +112,24 @@ export function TxReplay({ client, onTxLoaded }: Props) {
       setError(err instanceof Error ? err.message : "Transaction not found");
     } finally {
       setLoading(false);
+      onLoadingChange?.(false);
     }
   };
 
+  const handleFetch = () => runFetch(hash);
+
+  useEffect(() => {
+    if (autoFetched.current) return;
+    if (initialHash && initialHash.trim()) {
+      autoFetched.current = true;
+      runFetch(initialHash);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="space-y-2">
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           type="text"
           value={hash}
@@ -104,14 +144,143 @@ export function TxReplay({ client, onTxLoaded }: Props) {
         <button
           onClick={handleFetch}
           disabled={loading || !hash.trim()}
-          className="w-full rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-40 sm:w-auto"
+          className="w-full rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white ring-1 ring-purple-700 hover:bg-purple-600 hover:ring-purple-600 disabled:opacity-40 sm:w-auto"
         >
           {loading ? "Loading…" : "Load Tx"}
         </button>
+        {trailing}
       </div>
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
+}
+
+export function TxSummaryBar({
+  receipt,
+  book,
+}: {
+  receipt: TxReceipt;
+  book: AddressBook;
+}) {
+  const { tx } = receipt;
+  const val = BigInt(tx.value);
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-surface px-3 py-2.5">
+      <span
+        className={`rounded-full px-2 py-0.5 text-xs font-bold uppercase tracking-wider ${
+          receipt.status === "success"
+            ? "bg-green-900/50 text-green-400"
+            : "bg-red-900/50 text-red-400"
+        }`}
+      >
+        {receipt.status}
+      </span>
+      <SummaryField label="Block" value={receipt.blockNumber.toString()} />
+      <SummaryField label="Gas" value={receipt.gasUsed.toLocaleString()} />
+      {val > 0n && (
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-xs font-medium tracking-wider text-gray-600 uppercase">Value</span>
+          <span className="font-mono text-yellow-400">{formatEther(val)} {CURRENCY}</span>
+        </div>
+      )}
+      <div className="flex min-w-0 items-center gap-1.5 text-xs">
+        <span className="text-xs font-medium tracking-wider text-gray-600 uppercase">From</span>
+        <AddressLabel address={tx.from} book={book} className="min-w-0" />
+      </div>
+      <span className="text-gray-600">&rarr;</span>
+      <div className="flex min-w-0 items-center gap-1.5 text-xs">
+        <span className="text-xs font-medium tracking-wider text-gray-600 uppercase">To</span>
+        <AddressLabel address={tx.to} book={book} className="min-w-0" />
+      </div>
+      <a
+        href={`${EXPLORER_URL}/tx/${tx.hash}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ml-auto flex items-center gap-1 font-mono text-xs text-cyan-400 hover:text-cyan-300"
+      >
+        {tx.hash.slice(0, 8)}…{tx.hash.slice(-6)}
+        <svg className="size-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3M10 2h4m0 0v4m0-4L7 9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </a>
+    </div>
+  );
+}
+
+function SummaryField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-xs font-medium tracking-wider text-gray-600 uppercase">{label}</span>
+      <span className="font-mono text-gray-200">{value}</span>
+    </div>
+  );
+}
+
+function ReceiptField({
+  label,
+  accent,
+  children,
+}: {
+  label: string;
+  accent?: "yellow";
+  children: ReactNode;
+}) {
+  const yellow = accent === "yellow";
+  return (
+    <div
+      className={`rounded-md px-3 py-2 ring-1 ${
+        yellow ? "bg-yellow-950/20 ring-yellow-900/30" : "bg-gray-950/50 ring-gray-800/50"
+      }`}
+    >
+      <span
+        className={`text-xs font-medium uppercase tracking-wider ${
+          yellow ? "text-yellow-600" : "text-gray-600"
+        }`}
+      >
+        {label}
+      </span>
+      <div
+        className={`mt-0.5 break-all font-mono text-xs ${
+          yellow ? "text-yellow-400" : "text-gray-200"
+        }`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Strip trailing zeros (and a dangling dot) from a decimal string for display. */
+function trimDecimal(s: string): string {
+  if (!s.includes(".")) return s;
+  return s.replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatTimestamp(ts: bigint): { absolute: string; relative: string } {
+  const ms = Number(ts) * 1000;
+  const date = new Date(ms);
+  const absolute = date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const diffSec = Math.floor((Date.now() - ms) / 1000);
+  return { absolute, relative: formatRelative(diffSec) };
+}
+
+function formatRelative(seconds: number): string {
+  const abs = Math.abs(seconds);
+  const suffix = seconds >= 0 ? "ago" : "from now";
+  if (abs < 60) return `${abs}s ${suffix}`;
+  const mins = Math.floor(abs / 60);
+  if (mins < 60) return `${mins}m ${suffix}`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${suffix}`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${suffix}`;
 }
 
 export function TxReceiptPanel({
@@ -123,13 +292,19 @@ export function TxReceiptPanel({
 }) {
   const { tx } = receipt;
   const valBigInt = BigInt(tx.value);
+  const gasLimit = BigInt(tx.gasLimit);
+  const fee = receipt.gasUsed * receipt.effectiveGasPrice;
+  const gasUsedPct =
+    gasLimit > 0n ? (Number(receipt.gasUsed) / Number(gasLimit)) * 100 : 0;
+  const ts = receipt.timestamp > 0n ? formatTimestamp(receipt.timestamp) : null;
+  const gasPriceGwei = trimDecimal(formatGwei(receipt.effectiveGasPrice));
 
   return (
-    <div className="space-y-4 rounded-lg border border-gray-800 bg-gradient-to-b from-gray-900/80 to-gray-950/80 p-3 sm:p-4">
+    <div className="space-y-4 rounded-lg border border-border bg-surface p-3 sm:p-4">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold text-gray-100">Transaction Receipt</h3>
         <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+          className={`rounded-full px-2 py-0.5 text-xs font-bold uppercase tracking-wider ${
             receipt.status === "success"
               ? "bg-green-900/50 text-green-400"
               : "bg-red-900/50 text-red-400"
@@ -139,110 +314,209 @@ export function TxReceiptPanel({
         </span>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Tx Hash</span>
-          <a
-            href={`${EXPLORER_URL}/tx/${tx.hash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-cyan-400 hover:text-cyan-300"
-          >
-            {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
-            <svg className="size-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3M10 2h4m0 0v4m0-4L7 9" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </a>
-        </div>
-        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Block</span>
-          <p className="mt-0.5 font-mono text-xs text-gray-200">{receipt.blockNumber.toString()}</p>
-        </div>
-      </div>
+      <ReceiptField label="Tx Hash">
+        <a
+          href={`${EXPLORER_URL}/tx/${tx.hash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300"
+        >
+          <span className="min-w-0 break-all">{tx.hash}</span>
+          <svg className="size-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3M10 2h4m0 0v4m0-4L7 9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </a>
+      </ReceiptField>
 
       <div className="space-y-2 rounded-md bg-gray-950/50 px-3 py-2.5 ring-1 ring-gray-800/50">
         <div className="flex items-center gap-2 text-xs">
-          <span className="w-10 shrink-0 text-[10px] font-medium uppercase tracking-wider text-gray-600">From</span>
-          <AddressLabel address={tx.from} book={book} />
+          <span className="w-10 shrink-0 text-xs font-medium uppercase tracking-wider text-gray-600">From</span>
+          <AddressLabel address={tx.from} book={book} full />
         </div>
         <div className="flex items-center gap-2 text-xs">
-          <span className="w-10 shrink-0 text-[10px] font-medium uppercase tracking-wider text-gray-600">To</span>
-          <AddressLabel address={tx.to} book={book} />
+          <span className="w-10 shrink-0 text-xs font-medium uppercase tracking-wider text-gray-600">To</span>
+          <AddressLabel address={tx.to} book={book} full />
         </div>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
-        {valBigInt > 0n && (
-          <div className="rounded-md bg-yellow-950/20 px-3 py-2 ring-1 ring-yellow-900/30">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-yellow-600">Value</span>
-            <p className="mt-0.5 font-mono text-xs text-yellow-400">{formatEther(valBigInt)} PHRS</p>
-          </div>
-        )}
-        <div className="rounded-md bg-gray-950/50 px-3 py-2 ring-1 ring-gray-800/50">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-600">Gas Used</span>
-          <p className="mt-0.5 font-mono text-xs text-gray-200">{receipt.gasUsed.toLocaleString()}</p>
-        </div>
+        <ReceiptField label="Block">
+          <a
+            href={`${EXPLORER_URL}/block/${receipt.blockNumber.toString()}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-cyan-400 hover:text-cyan-300"
+          >
+            {receipt.blockNumber.toString()}
+          </a>
+        </ReceiptField>
+        <ReceiptField label="Timestamp">
+          {ts ? (
+            <>
+              <span className="text-gray-200">{ts.relative}</span>
+              <span className="ml-1 text-gray-500">({ts.absolute})</span>
+            </>
+          ) : (
+            <span className="text-gray-500">Unknown</span>
+          )}
+        </ReceiptField>
+
+        <ReceiptField label="Value" accent={valBigInt > 0n ? "yellow" : undefined}>
+          {trimDecimal(formatEther(valBigInt))} {CURRENCY}
+        </ReceiptField>
+        <ReceiptField label="Transaction Fee">
+          {trimDecimal(formatEther(fee))} {CURRENCY}
+        </ReceiptField>
+
+        <ReceiptField label="Gas Price">
+          {gasPriceGwei} Gwei
+        </ReceiptField>
+        <ReceiptField label="Gas Limit & Usage">
+          <span className="text-gray-200">{gasLimit.toLocaleString()}</span>
+          <span className="text-gray-600"> | </span>
+          <span className="text-gray-200">{receipt.gasUsed.toLocaleString()}</span>
+          <span className="text-gray-500">
+            {" "}
+            ({gasUsedPct.toLocaleString(undefined, { maximumFractionDigits: 2 })}%)
+          </span>
+        </ReceiptField>
+
+        <ReceiptField label="Nonce">{tx.nonce.toLocaleString()}</ReceiptField>
+        <ReceiptField label="Position In Block">{tx.transactionIndex}</ReceiptField>
       </div>
 
-      <InputDataSection data={tx.data} to={tx.to} />
+      <InputDataSection data={tx.data} to={tx.to} book={book} />
 
-      {receipt.logs.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <p className="text-xs font-semibold text-gray-300">Events</p>
-            <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400">
-              {receipt.logs.length}
-            </span>
-          </div>
-          {receipt.logs.map((log, i) => (
-            <details key={i} className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50">
-              <summary className="flex cursor-pointer items-center gap-2 overflow-hidden px-3 py-2">
-                <span className="shrink-0 rounded bg-violet-900/40 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-violet-400 ring-1 ring-violet-800/30">
-                  {log.eventName}
-                </span>
-                <AddressLabel address={log.address} book={book} className="min-w-0" />
-              </summary>
-              <div className="border-t border-gray-800/50 px-3 py-2">
-                {Object.keys(log.args).length > 0 ? (
-                  <div className="space-y-1">
-                    {Object.entries(log.args).map(([key, val]) => (
-                      <div key={key} className="flex gap-2 text-xs">
-                        <span className="shrink-0 text-gray-500">{key}:</span>
-                        <span className="break-all font-mono text-cyan-300">
-                          {formatVal(val)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {log.raw.topics.length > 0 && (
-                      <div className="text-xs">
-                        <span className="text-gray-500">topics: </span>
-                        {log.raw.topics.map((t, ti) => (
-                          <span
-                            key={ti}
-                            className="block break-all pl-4 font-mono text-[11px] text-gray-500"
-                          >
-                            [{ti}] {t}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {log.raw.data && log.raw.data !== "0x" && (
-                      <div className="text-xs">
-                        <span className="text-gray-500">data: </span>
-                        <span className="break-all font-mono text-[11px] text-gray-500">
-                          {log.raw.data}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </details>
-          ))}
+      {receipt.logs.length > 0 && <EventsPanel logs={receipt.logs} book={book} />}
+    </div>
+  );
+}
+
+/** Flatten a decoded arg value to a searchable string (handles bigint/nesting). */
+function deepString(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "bigint") return v.toString();
+  if (Array.isArray(v)) return v.map(deepString).join(" ");
+  if (typeof v === "object") {
+    return Object.entries(v as Record<string, unknown>)
+      .map(([k, val]) => `${k} ${deepString(val)}`)
+      .join(" ");
+  }
+  return String(v);
+}
+
+/** Lowercased haystack for filtering: name, address, label, args, topics, data. */
+function logHaystack(log: DecodedLog, book: AddressBook): string {
+  const parts: string[] = [log.eventName, log.address];
+  const label = book.resolve(log.address);
+  if (label) parts.push(label);
+  for (const [k, v] of Object.entries(log.args)) parts.push(k, deepString(v));
+  for (const t of log.raw.topics) parts.push(t);
+  if (log.raw.data) parts.push(log.raw.data);
+  return parts.join(" ").toLowerCase();
+}
+
+function EventsPanel({ logs, book }: { logs: DecodedLog[]; book: AddressBook }) {
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const indexed = useMemo(() => logs.map((log, i) => ({ log, i })), [logs]);
+  const filtered = query
+    ? indexed.filter(({ log }) => logHaystack(log, book).includes(query))
+    : indexed;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold text-gray-300">Events</p>
+        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-400">
+          {query ? `${filtered.length}/${logs.length}` : logs.length}
+        </span>
+        <div className="relative ml-auto w-full sm:w-52">
+          <svg
+            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-gray-500"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filter by name, address, value…"
+            spellCheck={false}
+            className="w-full rounded bg-gray-900 py-1 pr-6 pl-7 text-xs text-gray-300 outline-none ring-1 ring-gray-700 focus:ring-cyan-600"
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              aria-label="Clear filter"
+              className="absolute top-1/2 right-1.5 -translate-y-1/2 text-gray-600 hover:text-gray-300"
+            >
+              <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          )}
         </div>
+      </div>
+      {filtered.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-gray-600">No events match the filter.</p>
+      ) : (
+        filtered.map(({ log, i }) => (
+          <details key={i} className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50">
+            <summary className="flex cursor-pointer items-center gap-2 overflow-hidden px-3 py-2">
+              <span className="shrink-0 rounded bg-violet-900/40 px-1.5 py-0.5 font-mono text-xs font-semibold text-violet-400 ring-1 ring-violet-800/30">
+                {log.eventName}
+              </span>
+              <AddressLabel address={log.address} book={book} className="min-w-0" />
+            </summary>
+            <div className="border-t border-gray-800/50 px-3 py-2">
+              {Object.keys(log.args).length > 0 ? (
+                <div className="space-y-1">
+                  {Object.entries(log.args).map(([key, val]) => (
+                    <div key={key} className="flex gap-2 text-xs">
+                      <span className="shrink-0 text-gray-500">{key}:</span>
+                      <span className="min-w-0 break-all font-mono">
+                        <ValueView value={val} book={book} />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {log.raw.topics.length > 0 && (
+                    <div className="text-xs">
+                      <span className="text-gray-500">topics: </span>
+                      {log.raw.topics.map((t, ti) => (
+                        <span
+                          key={ti}
+                          className="block break-all pl-4 font-mono text-xs text-gray-500"
+                        >
+                          [{ti}] {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {log.raw.data && log.raw.data !== "0x" && (
+                    <div className="text-xs">
+                      <span className="text-gray-500">data: </span>
+                      <span className="break-all font-mono text-xs text-gray-500">
+                        {log.raw.data}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </details>
+        ))
       )}
     </div>
   );
@@ -291,7 +565,7 @@ function tryDecodeInput(data: Hex, to: Address): DecodedInput | null {
   return null;
 }
 
-function InputDataSection({ data, to }: { data: Hex; to: Address }) {
+function InputDataSection({ data, to, book }: { data: Hex; to: Address; book: AddressBook }) {
   const [showRaw, setShowRaw] = useState(false);
   const decoded = useMemo(() => tryDecodeInput(data, to), [data, to]);
   const byteLen = data.length > 2 ? (data.length - 2) / 2 : 0;
@@ -308,16 +582,16 @@ function InputDataSection({ data, to }: { data: Hex; to: Address }) {
     <details className="group rounded-md bg-gray-950/50 ring-1 ring-gray-800/50" open>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:text-gray-300">
         <span>Input data</span>
-        <span className="text-[10px] text-gray-600">({byteLen} bytes)</span>
+        <span className="text-xs text-gray-600">({byteLen} bytes)</span>
         {decoded && (
-          <span className="rounded bg-emerald-900/40 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-800/30">
+          <span className="rounded bg-emerald-900/40 px-1.5 py-0.5 font-mono text-xs font-semibold text-emerald-400 ring-1 ring-emerald-800/30">
             {decoded.functionName}
           </span>
         )}
         {decoded && (
           <button
             onClick={(e) => { e.preventDefault(); setShowRaw((v) => !v); }}
-            className="ml-auto rounded bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400 transition-colors hover:bg-gray-700 hover:text-gray-200"
+            className="ml-auto rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-400 transition-colors hover:bg-gray-700 hover:text-gray-200"
           >
             {showRaw ? "Parsed" : "Raw"}
           </button>
@@ -325,29 +599,46 @@ function InputDataSection({ data, to }: { data: Hex; to: Address }) {
       </summary>
       <div className="border-t border-gray-800/50">
         {decoded && !showRaw ? (
-          <div className="space-y-1 px-3 py-2">
+          <div className="space-y-2 px-3 py-2">
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-xs font-semibold text-emerald-400">{decoded.functionName}</span>
-              <span className="text-[10px] text-gray-600">({decoded.args.length} args)</span>
+              <span className="text-xs text-gray-600">({decoded.args.length} args)</span>
             </div>
-            {decoded.args.length > 0 && (
-              <div className="mt-1 space-y-1">
-                {Array.from(decoded.args).map((arg, i) => (
-                  <div key={i} className="flex gap-2 text-xs">
-                    <span className="shrink-0 text-gray-600">
-                      {decoded.argNames[i] || `[${i}]`}
-                      {decoded.argTypes[i] && (
-                        <span className="ml-1 text-[10px] text-gray-700">{decoded.argTypes[i]}</span>
-                      )}
-                    </span>
-                    <span className="break-all font-mono text-cyan-300">{formatVal(arg)}</span>
-                  </div>
-                ))}
+            {decoded.args.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-800 text-left text-gray-600">
+                      <th className="py-1 pr-2 font-medium">#</th>
+                      <th className="py-1 pr-3 font-medium">Param</th>
+                      <th className="py-1 pr-3 font-medium">Type</th>
+                      <th className="py-1 font-medium">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(decoded.args).map((arg, i) => (
+                      <tr key={i} className="border-b border-gray-800/50 align-top last:border-0">
+                        <td className="py-1.5 pr-2 tabular-nums text-gray-600">{i}</td>
+                        <td className="py-1.5 pr-3 font-mono text-gray-300">
+                          {decoded.argNames[i] || `arg${i}`}
+                        </td>
+                        <td className="py-1.5 pr-3 font-mono text-gray-500">
+                          {decoded.argTypes[i] || "—"}
+                        </td>
+                        <td className="py-1.5 font-mono">
+                          <ValueView value={arg} book={book} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
+            ) : (
+              <p className="text-xs text-gray-600">No parameters</p>
             )}
           </div>
         ) : (
-          <pre className="max-h-32 overflow-auto px-3 py-2 whitespace-pre-wrap break-all font-mono text-[11px] text-gray-500">
+          <pre className="max-h-72 overflow-y-auto px-3 py-2 whitespace-pre-wrap break-all font-mono text-xs text-gray-500">
             {data}
           </pre>
         )}
@@ -356,21 +647,6 @@ function InputDataSection({ data, to }: { data: Hex; to: Address }) {
   );
 }
 
-function formatVal(val: unknown): string {
-  if (val === undefined || val === null) return "void";
-  if (typeof val === "bigint") return val.toString();
-  if (typeof val === "string") return val;
-  if (typeof val === "boolean") return String(val);
-  try {
-    return JSON.stringify(
-      val,
-      (_key, v) => (typeof v === "bigint" ? v.toString() : v),
-      2,
-    );
-  } catch {
-    return String(val);
-  }
-}
 
 const OPENCHAIN_API =
   "https://api.openchain.xyz/signature-database/v1/lookup";

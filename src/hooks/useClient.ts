@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { createPublicClient, http, type PublicClient } from "viem";
-import { pharosTestnet, DEFAULT_RPC } from "../config/chain";
+import { ACTIVE_NETWORK, DEFAULT_RPC } from "../config/chain";
 import { getSavedRpcUrl, saveRpcUrl } from "../lib/storage";
 
 export function useClient() {
@@ -10,7 +10,7 @@ export function useClient() {
   const client: PublicClient = useMemo(
     () =>
       createPublicClient({
-        chain: pharosTestnet,
+        chain: ACTIVE_NETWORK.chain,
         transport: http(rpcUrl),
       }),
     [rpcUrl],
