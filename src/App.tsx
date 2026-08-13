@@ -707,7 +707,14 @@ function NetworkSwitcher() {
       return;
     }
     setActiveNetworkId(id);
-    window.location.reload();
+    // URL `net` wins over localStorage on load, so a bare reload would snap
+    // back to the previous chain. Navigate with the new param instead.
+    const params = new URLSearchParams(window.location.search);
+    params.set("net", id);
+    params.delete("address");
+    params.delete("tx");
+    params.delete("sim");
+    window.location.assign(`${window.location.pathname}?${params.toString()}`);
   };
 
   return (
