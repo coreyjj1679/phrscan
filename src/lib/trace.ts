@@ -416,6 +416,44 @@ export async function fetchStateDiff(
   }
 }
 
+/** prestateTracer diff for an eth_call (queued / simulated txs, no hash). */
+export async function traceCallStateDiff(
+  client: PublicClient,
+  callParams: {
+    from?: string;
+    to: string;
+    data?: Hex;
+    value?: bigint;
+  },
+  blockNumber?: bigint,
+): Promise<StateDiff | null> {
+  try {
+    const callObj: Record<string, unknown> = { to: callParams.to };
+    if (callParams.from) callObj.from = callParams.from;
+    if (callParams.data) callObj.data = callParams.data;
+    if (callParams.value) callObj.value = `0x${callParams.value.toString(16)}`;
+    const blockTag = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
+
+    const result = await client.request({
+      method: "debug_traceCall" as never,
+      params: [
+        callObj,
+        blockTag,
+        { tracer: "prestateTracer", tracerConfig: { diffMode: true } },
+      ] as never,
+    });
+
+    const raw = result as unknown as {
+      pre?: Record<string, AccountState>;
+      post?: Record<string, AccountState>;
+    };
+    if (!raw.pre && !raw.post) return null;
+    return { pre: raw.pre ?? {}, post: raw.post ?? {} };
+  } catch {
+    return null;
+  }
+}
+
 export function flattenTrace(trace: TraceCall): TraceCall[] {
   const result: TraceCall[] = [trace];
   if (trace.calls) {

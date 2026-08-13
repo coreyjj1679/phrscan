@@ -1,88 +1,11 @@
 import { useState, useEffect } from "react";
-import { decodeFunctionData, parseAbiItem, type Abi, type Hex } from "viem";
-import { getAbiRegistry } from "../lib/storage";
-import { lookupSelectorSignatures } from "../lib/selectors";
+import { decodeCalldata, type DecodedCalldata } from "../lib/decodeCalldata";
 import { ValueView } from "./ValueView";
 import { CopyButton } from "./CopyButton";
 
-type AbiFnItem = {
-  type: string;
-  name?: string;
-  inputs?: { name?: string; type: string }[];
-};
-
-type DecodedArg = { name?: string; type: string; value: unknown };
-
-type Decoded = {
-  selector: string;
-  name: string | null;
-  signature?: string;
-  source: "abi" | "4byte" | "none";
-  args: DecodedArg[];
-  candidates?: string[];
-};
-
-function buildArgs(
-  inputs: { name?: string; type: string }[],
-  args: readonly unknown[] | undefined,
-): DecodedArg[] {
-  return (args ?? []).map((value, i) => ({
-    name: inputs[i]?.name || undefined,
-    type: inputs[i]?.type ?? "",
-    value,
-  }));
-}
-
-async function decodeCalldata(hex: string): Promise<Decoded> {
-  const data = hex as Hex;
-  const selector = hex.slice(0, 10);
-
-  const registry = getAbiRegistry();
-  for (const [, abi] of registry) {
-    try {
-      const { functionName, args } = decodeFunctionData({ abi, data });
-      const item = (abi as unknown as AbiFnItem[]).find(
-        (i) => i.type === "function" && i.name === functionName,
-      );
-      const inputs = item?.inputs ?? [];
-      return {
-        selector,
-        name: functionName,
-        signature: `${functionName}(${inputs.map((x) => x.type).join(",")})`,
-        source: "abi",
-        args: buildArgs(inputs, args as readonly unknown[]),
-      };
-    } catch {
-      // try next ABI
-    }
-  }
-
-  const candidates = await lookupSelectorSignatures(selector);
-  for (const sig of candidates) {
-    try {
-      const item = parseAbiItem(`function ${sig}`) as unknown as AbiFnItem;
-      const { functionName, args } = decodeFunctionData({
-        abi: [item] as unknown as Abi,
-        data,
-      });
-      return {
-        selector,
-        name: functionName,
-        signature: sig,
-        source: "4byte",
-        args: buildArgs(item.inputs ?? [], args as readonly unknown[]),
-      };
-    } catch {
-      // signature didn't decode the data — try next candidate
-    }
-  }
-
-  return { selector, name: null, source: "none", args: [], candidates };
-}
-
 export function CalldataDecoder() {
   const [input, setInput] = useState("");
-  const [result, setResult] = useState<Decoded | null>(null);
+  const [result, setResult] = useState<DecodedCalldata | null>(null);
   const [loading, setLoading] = useState(false);
 
   const hex = input.trim();

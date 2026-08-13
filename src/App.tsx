@@ -24,7 +24,9 @@ import { AddressMenuProvider } from "./components/AddressMenu";
 import { CalldataDecoder } from "./components/CalldataDecoder";
 import { ErrorDecoder } from "./components/ErrorDecoder";
 import { SignatureTool } from "./components/SignatureTool";
+import { SelectorLookup } from "./components/SelectorLookup";
 import { BundleSimulator } from "./components/BundleSimulator";
+import { SafeTxPage } from "./components/SafeTxPage";
 import { fnKey, type AbiFunction } from "./lib/abi";
 import { countCalls } from "./lib/trace";
 import type { CallResult } from "./lib/simulate";
@@ -35,7 +37,7 @@ import { classifyQuery } from "./lib/search";
 import { decodeSim } from "./lib/shareSim";
 import { ACTIVE_NETWORK, NETWORKS, setActiveNetworkId, type NetworkId, EXPLORER_URL } from "./config/chain";
 
-type Page = "explore" | "contract" | "replay" | "bundle" | "decode" | "addresses" | "settings";
+type Page = "explore" | "contract" | "replay" | "bundle" | "decode" | "safe" | "addresses" | "settings";
 type ContractTab = "functions" | "calldata" | "code" | "storage";
 type ReplayTab = "receipt" | "trace" | "flow" | "state" | "resim";
 
@@ -56,6 +58,7 @@ export default function App() {
     initialTab === "replay" ||
     initialTab === "bundle" ||
     initialTab === "decode" ||
+    initialTab === "safe" ||
     initialTab === "addresses" ||
     initialTab === "settings"
       ? initialTab
@@ -86,11 +89,12 @@ export default function App() {
   );
   const [txReceipt, setTxReceipt] = useState<TxReceipt | null>(null);
   const [txHash, setTxHash] = useState(() => initialParams.get("tx") ?? "");
+  const [safeAddress, setSafeAddress] = useState(() => initialParams.get("safe") ?? "");
   const [replayLoading, setReplayLoading] = useState(false);
   const [replayResult, setReplayResult] = useState<CallResult | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   const [replayTab, setReplayTab] = useState<ReplayTab>("receipt");
-  const [decodeTab, setDecodeTab] = useState<"calldata" | "errors" | "signature">("calldata");
+  const [decodeTab, setDecodeTab] = useState<"calldata" | "errors" | "signature" | "selector">("calldata");
   const [pendingTx, setPendingTx] = useState("");
   const [replayKey, setReplayKey] = useState(0);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -137,13 +141,14 @@ export default function App() {
     params.set("net", ACTIVE_NETWORK.id);
     if (contractAddress) params.set("address", contractAddress);
     if (txHash) params.set("tx", txHash);
+    if (safeAddress) params.set("safe", safeAddress);
     // Preserve a shared-simulation payload so the link stays reload-safe
     // instead of being wiped the moment the page loads.
     const sim = initialParams.get("sim");
     if (sim) params.set("sim", sim);
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [page, contractAddress, txHash, initialParams]);
+  }, [page, contractAddress, txHash, safeAddress, initialParams]);
 
   const handleLoadAddress = (address: string) => {
     setContractAddress(address);
@@ -278,6 +283,9 @@ export default function App() {
             <NavButton active={page === "decode"} onClick={() => setPage("decode")}>
               Decode
             </NavButton>
+            <NavButton active={page === "safe"} onClick={() => setPage("safe")}>
+              Safe
+            </NavButton>
             <NavButton active={page === "addresses"} onClick={() => setPage("addresses")}>
               Addresses
             </NavButton>
@@ -325,11 +333,25 @@ export default function App() {
             <SubTab active={decodeTab === "signature"} onClick={() => setDecodeTab("signature")}>
               Signature
             </SubTab>
+            <SubTab active={decodeTab === "selector"} onClick={() => setDecodeTab("selector")}>
+              Selector
+            </SubTab>
           </div>
           {decodeTab === "calldata" && <CalldataDecoder />}
           {decodeTab === "errors" && <ErrorDecoder />}
           {decodeTab === "signature" && <SignatureTool />}
+          {decodeTab === "selector" && <SelectorLookup />}
         </div>
+      )}
+
+      {page === "safe" && (
+        <SafeTxPage
+          client={client}
+          book={addressBook}
+          addressBookSuggest={addressBookSuggest}
+          initialAddress={safeAddress}
+          onAddressChange={setSafeAddress}
+        />
       )}
 
       {page === "settings" && (
@@ -714,6 +736,7 @@ function NetworkSwitcher() {
     params.delete("address");
     params.delete("tx");
     params.delete("sim");
+    params.delete("safe");
     window.location.assign(`${window.location.pathname}?${params.toString()}`);
   };
 
