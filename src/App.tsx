@@ -351,6 +351,7 @@ export default function App() {
           addressBookSuggest={addressBookSuggest}
           initialAddress={safeAddress}
           onAddressChange={setSafeAddress}
+          rpcUrl={rpcUrl}
         />
       )}
 

@@ -1,6 +1,7 @@
 import {
   bytesToBigInt,
   bytesToHex,
+  encodeFunctionData,
   getAddress,
   hexToBytes,
   parseAbi,
@@ -18,6 +19,7 @@ import {
   SAFE_SYSTEM_CONTRACTS,
 } from "../config/chain";
 import { decodeCalldata, type DecodedCalldata } from "./decodeCalldata";
+import { decodeRevert } from "./decodeError";
 import { humanizeError } from "./errors";
 
 export const SAFE_TX_ABI = parseAbi([
@@ -55,6 +57,25 @@ export type SafeTxConfirmation = {
   signature?: string;
 };
 
+/** The gas/refund half of execTransaction, needed to replay it faithfully. */
+export type SafeExecParams = {
+  safeTxGas: bigint;
+  baseGas: bigint;
+  gasPrice: bigint;
+  gasToken: Address;
+  refundReceiver: Address;
+};
+
+export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+
+export const DEFAULT_EXEC_PARAMS: SafeExecParams = {
+  safeTxGas: 0n,
+  baseGas: 0n,
+  gasPrice: 0n,
+  gasToken: ZERO_ADDRESS,
+  refundReceiver: ZERO_ADDRESS,
+};
+
 export type SafeMultisigTx = {
   id: string;
   safeTxHash?: string;
@@ -66,6 +87,7 @@ export type SafeMultisigTx = {
   confirmations: SafeTxConfirmation[];
   signers: string[];
   call: DecodedSafeCall;
+  execParams: SafeExecParams;
 };
 
 export function isSafeClientSupported(): boolean {
@@ -165,8 +187,32 @@ type CgwTxDetail = {
     confirmations?: { signer?: { value?: string }; signature?: string }[];
     signers?: { value?: string }[];
     submittedAt?: number;
+    safeTxGas?: string | number;
+    baseGas?: string | number;
+    gasPrice?: string | number;
+    gasToken?: string;
+    refundReceiver?: { value?: string } | string;
   };
 };
+
+function toBigInt(v: string | number | undefined, fallback = 0n): bigint {
+  if (v === undefined || v === null || v === "") return fallback;
+  try {
+    return BigInt(v);
+  } catch {
+    return fallback;
+  }
+}
+
+function toAddress(v: { value?: string } | string | undefined): Address {
+  const raw = typeof v === "string" ? v : v?.value;
+  if (!raw) return ZERO_ADDRESS;
+  try {
+    return getAddress(raw);
+  } catch {
+    return ZERO_ADDRESS;
+  }
+}
 
 async function cgwJson<T>(path: string): Promise<T> {
   const res = await fetch(`${SAFE_CLIENT_URL}${path}`);
@@ -238,6 +284,13 @@ async function detailToMultisig(
     confirmations,
     signers,
     call: await decodeSafeCall(to, value, data, operation),
+    execParams: {
+      safeTxGas: toBigInt(exec?.safeTxGas),
+      baseGas: toBigInt(exec?.baseGas),
+      gasPrice: toBigInt(exec?.gasPrice),
+      gasToken: toAddress(exec?.gasToken),
+      refundReceiver: toAddress(exec?.refundReceiver),
+    },
   };
 }
 
@@ -424,6 +477,13 @@ async function execTxFromInput(
     confirmations: from ? [{ signer: from }] : [],
     signers: [],
     call: await decodeSafeCall(to, value, data, operation),
+    execParams: {
+      safeTxGas: (decoded.args[4]?.value as bigint) ?? 0n,
+      baseGas: (decoded.args[5]?.value as bigint) ?? 0n,
+      gasPrice: (decoded.args[6]?.value as bigint) ?? 0n,
+      gasToken: toAddress(decoded.args[7]?.value as string | undefined),
+      refundReceiver: toAddress(decoded.args[8]?.value as string | undefined),
+    },
   };
 }
 
@@ -483,4 +543,178 @@ export async function fetchOnchainSafeTxByHash(
   );
   if (!parsed) throw new Error("Not an execTransaction call.");
   return parsed;
+}
+
+/** Safe stores `threshold` in slot 4. */
+const THRESHOLD_SLOT =
+  "0x0000000000000000000000000000000000000000000000000000000000000004" as Hex;
+const ONE_WORD =
+  "0x0000000000000000000000000000000000000000000000000000000000000001" as Hex;
+
+const SAFE_ERRORS: Record<string, string> = {
+  GS000: "Could not finish initialization",
+  GS001: "Threshold needs to be defined",
+  GS010: "Not enough gas to execute the Safe transaction",
+  GS011: "Could not pay gas costs with the chosen token",
+  GS012: "Could not pay gas costs with the native currency",
+  GS013: "Safe transaction failed — the inner call reverted",
+  GS020: "Signatures data too short",
+  GS021: "Invalid contract signature location: inside static part",
+  GS022: "Invalid contract signature location: length not present",
+  GS023: "Invalid contract signature location: data not complete",
+  GS024: "Invalid contract signature provided",
+  GS025: "Hash has not been approved",
+  GS026: "Invalid owner provided",
+  GS030: "Only owners can approve a hash",
+  GS031: "Method can only be called from this contract",
+};
+
+/**
+ * Pre-validated signature (v = 1): accepted when the caller is the owner named
+ * in `r`, so the simulation needs no real signatures.
+ */
+function preValidatedSignature(owner: Address): Hex {
+  const padded = owner.slice(2).toLowerCase().padStart(64, "0");
+  return `0x${padded}${"0".repeat(64)}01` as Hex;
+}
+
+function revertDataOf(err: unknown): Hex | null {
+  let cur: unknown = err;
+  for (let i = 0; i < 12 && cur; i++) {
+    const node = cur as Record<string, unknown>;
+    const d = node.data;
+    if (typeof d === "string" && d.startsWith("0x")) return d as Hex;
+    if (d && typeof d === "object") {
+      const nested = (d as Record<string, unknown>).data;
+      if (typeof nested === "string" && nested.startsWith("0x")) return nested as Hex;
+    }
+    cur = node.cause;
+  }
+  return null;
+}
+
+function rpcMessageOf(err: unknown): string {
+  let cur: unknown = err;
+  let details = "";
+  for (let i = 0; i < 12 && cur; i++) {
+    const node = cur as Record<string, unknown>;
+    if (typeof node.details === "string" && node.details) details = node.details;
+    cur = node.cause;
+  }
+  if (details) return details;
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Expand a bare Safe error code ("GS013") into something readable. */
+export function safeErrorText(reason: string): string {
+  const code = reason.trim().match(/^GS\d{3}$/)?.[0];
+  if (!code) return reason;
+  return `${code} — ${SAFE_ERRORS[code] ?? "Safe check failed"}`;
+}
+
+async function reasonFromError(err: unknown): Promise<{ reason: string; data?: Hex }> {
+  const data = revertDataOf(err);
+  const message = rpcMessageOf(err);
+
+  if (data && data !== "0x") {
+    const decoded = await decodeRevert(data);
+    const text = decoded.reason ?? decoded.signature ?? decoded.name ?? null;
+    if (text) return { reason: safeErrorText(text), data };
+  }
+
+  const code = message.match(/GS\d{3}/)?.[0];
+  if (code) return { reason: safeErrorText(code), data: data ?? undefined };
+
+  // The node puts the reason straight in the message: "execution reverted: X".
+  const inline = message.match(/execution reverted:\s*(.+?)(?:\n|$)/i)?.[1]?.trim();
+  if (inline) return { reason: inline, data: data ?? undefined };
+
+  return { reason: humanizeError(message), data: data ?? undefined };
+}
+
+export type SafeExecVerdict =
+  /** execTransaction returned true — the whole Safe transaction would go through. */
+  | { status: "success"; owner: Address }
+  /** execTransaction succeeded but the inner call failed (ExecutionFailure). */
+  | { status: "inner-failed"; owner: Address }
+  /** execTransaction itself reverted (guard, gas, signatures, refund…). */
+  | { status: "reverted"; owner: Address; reason: string; data?: Hex }
+  /** The node refused the simulation (e.g. no state-override support). */
+  | { status: "unavailable"; reason: string };
+
+/**
+ * Simulate the real `execTransaction` the way Safe{Wallet} does: override the
+ * Safe's threshold to 1 and sign with a pre-validated signature from an owner.
+ * Unlike simulating the inner call alone this exercises delegatecall semantics,
+ * guards, modules and the refund path.
+ */
+export async function simulateExecTransaction(
+  client: PublicClient,
+  safe: SafeInfo,
+  tx: { call: DecodedSafeCall; execParams: SafeExecParams },
+): Promise<SafeExecVerdict> {
+  const owner = safe.owners[0];
+  if (!owner) {
+    return { status: "unavailable", reason: "This Safe has no owners to simulate as." };
+  }
+  const { call, execParams } = tx;
+  let data: Hex;
+  try {
+    data = encodeFunctionData({
+      abi: SAFE_TX_ABI,
+      functionName: "execTransaction",
+      args: [
+        getAddress(call.to),
+        call.value,
+        (call.data || "0x") as Hex,
+        call.operation,
+        execParams.safeTxGas,
+        execParams.baseGas,
+        execParams.gasPrice,
+        execParams.gasToken,
+        execParams.refundReceiver,
+        preValidatedSignature(owner),
+      ],
+    });
+  } catch (e) {
+    return {
+      status: "unavailable",
+      reason: `Could not rebuild execTransaction: ${humanizeError(e instanceof Error ? e.message : String(e))}`,
+    };
+  }
+
+  try {
+    const raw = await client.call({
+      to: safe.address,
+      data,
+      account: owner,
+      stateOverride: [
+        {
+          address: safe.address,
+          stateDiff: [{ slot: THRESHOLD_SLOT, value: ONE_WORD }],
+        },
+      ],
+    });
+    let innerOk = true;
+    const out = raw.data ?? "0x";
+    if (out !== "0x") {
+      try {
+        innerOk = BigInt(out) !== 0n;
+      } catch {
+        innerOk = true;
+      }
+    }
+    return { status: innerOk ? "success" : "inner-failed", owner };
+  } catch (err) {
+    const { reason, data: revertData } = await reasonFromError(err);
+    // With the override applied a real owner can never trip the signature
+    // length check, so GS020 means the node silently dropped the override.
+    if (safe.threshold > 1 && reason.startsWith("GS020")) {
+      return {
+        status: "unavailable",
+        reason: "This RPC ignores state overrides on eth_call, so the Safe's threshold could not be bypassed.",
+      };
+    }
+    return { status: "reverted", owner, reason, data: revertData };
+  }
 }

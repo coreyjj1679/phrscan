@@ -9,9 +9,15 @@ import { ResultPanel } from "./ResultPanel";
 import { CallTrace } from "./CallTrace";
 import { GasProfiler } from "./GasProfiler";
 import { MoneyFlow } from "./MoneyFlow";
-import { StateChanges } from "./StateChanges";
-import { countCalls, traceCallStateDiff, type StateDiff, type TraceCall } from "../lib/trace";
-import { CURRENCY, EXPLORER_URL, SAFE_APP_CHAIN } from "../config/chain";
+import { countCalls, type TraceCall } from "../lib/trace";
+import { ACTIVE_NETWORK, CURRENCY, EXPLORER_URL, SAFE_APP_CHAIN } from "../config/chain";
+import {
+  startSafeBundle,
+  type BundleHandle,
+  type BundleProgress,
+  type BundleResult,
+  type BundleTxResult,
+} from "../lib/safeBundle";
 import {
   fetchOnchainSafeTxByHash,
   fetchOnchainSafeTxs,
@@ -19,9 +25,12 @@ import {
   fetchSafeInfo,
   isSafeClientSupported,
   safeAppTxUrl,
+  safeErrorText,
+  simulateExecTransaction,
   sortTxsAsc,
   txTimestampMs,
   type DecodedSafeCall,
+  type SafeExecVerdict,
   type SafeInfo,
   type SafeMultisigTx,
 } from "../lib/safe";
@@ -36,6 +45,7 @@ type Props = {
   addressBookSuggest: boolean;
   initialAddress: string;
   onAddressChange: (address: string) => void;
+  rpcUrl: string;
 };
 
 type Tab = "queue" | "history";
@@ -46,6 +56,7 @@ export function SafeTxPage({
   addressBookSuggest,
   initialAddress,
   onAddressChange,
+  rpcUrl,
 }: Props) {
   const [input, setInput] = useState(initialAddress);
   const [info, setInfo] = useState<SafeInfo | null>(null);
@@ -57,6 +68,7 @@ export function SafeTxPage({
   const [cgw, setCgw] = useState(isSafeClientSupported());
   const [hashInput, setHashInput] = useState("");
   const [hashError, setHashError] = useState<string | null>(null);
+  const [bundle, setBundle] = useState<BundleResult | null>(null);
   const auto = useRef(false);
 
   const load = async (raw: string) => {
@@ -71,6 +83,7 @@ export function SafeTxPage({
     setInfo(null);
     setQueued([]);
     setHistory([]);
+    setBundle(null);
     try {
       const safe = await fetchSafeInfo(client, trimmed);
       setInfo(safe);
@@ -219,22 +232,28 @@ export function SafeTxPage({
             </p>
           )}
 
+          {!loading && tab === "queue" && rows.length > 0 && (
+            <QueueSim
+              txs={rows}
+              safe={info}
+              rpcUrl={rpcUrl}
+              results={bundle}
+              onResults={setBundle}
+            />
+          )}
+
           {!loading && tab === "queue" && (
             <QueueList
               txs={rows}
               currentNonce={info.nonce}
               book={book}
-              safeAddress={info.address}
+              safe={info}
               client={client}
+              bundle={bundle}
             />
           )}
           {!loading && tab === "history" && (
-            <HistoryList
-              txs={rows}
-              book={book}
-              safeAddress={info.address}
-              client={client}
-            />
+            <HistoryList txs={rows} book={book} safe={info} client={client} />
           )}
         </div>
       )}
@@ -303,6 +322,142 @@ function SafeHeader({ info, book }: { info: SafeInfo; book: AddressBook }) {
   );
 }
 
+/**
+ * Runs the queue in nonce order in a local EVM, so a transaction that only
+ * works after an earlier one lands simulates correctly. Conflicting txs sharing
+ * a nonce can't all execute, so only the first of each nonce joins the bundle.
+ */
+function QueueSim({
+  txs,
+  safe,
+  rpcUrl,
+  results,
+  onResults,
+}: {
+  txs: SafeMultisigTx[];
+  safe: SafeInfo;
+  rpcUrl: string;
+  results: BundleResult | null;
+  onResults: (r: BundleResult | null) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<BundleProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const handle = useRef<BundleHandle | null>(null);
+
+  useEffect(() => () => handle.current?.cancel(), []);
+
+  const executable: SafeMultisigTx[] = [];
+  const seenNonce = new Set<number>();
+  let skippedConflicts = 0;
+  for (const tx of txs) {
+    if (tx.nonce === null || tx.nonce < safe.nonce) continue;
+    if (seenNonce.has(tx.nonce)) {
+      skippedConflicts++;
+      continue;
+    }
+    seenNonce.add(tx.nonce);
+    executable.push(tx);
+  }
+
+  const run = async () => {
+    setRunning(true);
+    setError(null);
+    onResults(null);
+    setProgress({ done: 0, total: executable.length, rpcCalls: 0 });
+    const h = startSafeBundle(
+      {
+        rpcUrl,
+        chainId: ACTIVE_NETWORK.chainId,
+        blockTag: "latest",
+        safe: safe.address,
+        owner: safe.owners[0],
+        txs: executable.map((tx) => ({
+          id: tx.id,
+          nonce: tx.nonce,
+          to: tx.call.to,
+          value: tx.call.value.toString(),
+          data: tx.call.data || "0x",
+          operation: tx.call.operation,
+          safeTxGas: tx.execParams.safeTxGas.toString(),
+          baseGas: tx.execParams.baseGas.toString(),
+          gasPrice: tx.execParams.gasPrice.toString(),
+          gasToken: tx.execParams.gasToken,
+          refundReceiver: tx.execParams.refundReceiver,
+        })),
+      },
+      setProgress,
+    );
+    handle.current = h;
+    try {
+      onResults(await h.promise);
+    } catch (e) {
+      setError(humanizeError(e instanceof Error ? e.message : String(e)));
+    } finally {
+      handle.current = null;
+      setRunning(false);
+    }
+  };
+
+  if (executable.length === 0 || !safe.owners[0]) return null;
+
+  const failed = results?.results.filter((r) => r.status !== "success").length ?? 0;
+
+  return (
+    <div className="space-y-2 border-t border-border bg-inset/40 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={run}
+          disabled={running}
+          className="rounded bg-cyan-700 px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-cyan-600 disabled:opacity-40"
+        >
+          {running ? "Simulating queue…" : `Simulate queue (${executable.length})`}
+        </button>
+        <span className="text-xs text-gray-500">
+          Runs nonce {executable[0].nonce} onward in order, each transaction seeing
+          the previous one's effects.
+        </span>
+      </div>
+
+      {running && progress && (
+        <p className="text-xs text-gray-500 tabular-nums">
+          {progress.done}/{progress.total} simulated · {progress.rpcCalls} RPC calls
+        </p>
+      )}
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+
+      {results && (
+        <div className="space-y-1">
+          <p className="text-xs text-gray-400">
+            {failed === 0
+              ? `All ${results.results.length} would execute in order.`
+              : `${failed} of ${results.results.length} would not go through.`}
+            {results.finalNonce !== null && (
+              <span className="text-gray-600">
+                {" "}
+                Safe nonce ends at {results.finalNonce}.
+              </span>
+            )}
+          </p>
+          {skippedConflicts > 0 && (
+            <p className="text-xs text-gray-600">
+              {skippedConflicts} conflicting transaction
+              {skippedConflicts === 1 ? "" : "s"} skipped — only one per nonce can
+              execute.
+            </p>
+          )}
+          <p className="text-xs text-gray-600">
+            Local EVM at the latest block, threshold set to 1. Block timestamp is
+            not applied, so time-dependent contracts may differ.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type NonceGroup = { nonce: number | null; txs: SafeMultisigTx[] };
 
 function groupByNonce(txs: SafeMultisigTx[]): NonceGroup[] {
@@ -319,14 +474,16 @@ function QueueList({
   txs,
   currentNonce,
   book,
-  safeAddress,
+  safe,
   client,
+  bundle,
 }: {
   txs: SafeMultisigTx[];
   currentNonce: number;
   book: AddressBook;
-  safeAddress: string;
+  safe: SafeInfo;
   client: PublicClient;
+  bundle: BundleResult | null;
 }) {
   const groups = groupByNonce(txs);
   const next = groups.filter((g) => g.nonce === currentNonce);
@@ -347,8 +504,9 @@ function QueueList({
               key={String(g.nonce)}
               group={g}
               book={book}
-              safeAddress={safeAddress}
+              safe={safe}
               client={client}
+              bundle={bundle}
             />
           ))}
         </div>
@@ -360,12 +518,12 @@ function QueueList({
 function HistoryList({
   txs,
   book,
-  safeAddress,
+  safe,
   client,
 }: {
   txs: SafeMultisigTx[];
   book: AddressBook;
-  safeAddress: string;
+  safe: SafeInfo;
   client: PublicClient;
 }) {
   return (
@@ -378,7 +536,7 @@ function HistoryList({
               key={`${g.label}-${String(n.nonce)}-${n.txs[0]?.id}`}
               group={n}
               book={book}
-              safeAddress={safeAddress}
+              safe={safe}
               client={client}
             />
           ))}
@@ -399,13 +557,15 @@ function ListHeading({ children }: { children: React.ReactNode }) {
 function NonceBundle({
   group,
   book,
-  safeAddress,
+  safe,
   client,
+  bundle,
 }: {
   group: NonceGroup;
   book: AddressBook;
-  safeAddress: string;
+  safe: SafeInfo;
   client: PublicClient;
+  bundle?: BundleResult | null;
 }) {
   const conflict = group.txs.length > 1;
   return (
@@ -429,9 +589,10 @@ function NonceBundle({
             key={tx.id}
             tx={tx}
             book={book}
-            safeAddress={safeAddress}
+            safe={safe}
             hideNonce={conflict}
             client={client}
+            bundleResult={bundle?.results.find((r) => r.id === tx.id) ?? null}
           />
         ))}
       </div>
@@ -482,15 +643,17 @@ function txKind(status: string): TxKind {
 function TxRow({
   tx,
   book,
-  safeAddress,
+  safe,
   hideNonce,
   client,
+  bundleResult,
 }: {
   tx: SafeMultisigTx;
   book: AddressBook;
-  safeAddress: string;
+  safe: SafeInfo;
   hideNonce?: boolean;
   client: PublicClient;
+  bundleResult?: BundleTxResult | null;
 }) {
   const [open, setOpen] = useState(false);
   const when = txTimestampMs(tx.timestamp);
@@ -548,6 +711,7 @@ function TxRow({
             )}
           </div>
         </div>
+        {bundleResult && <BundleBadge result={bundleResult} />}
         {status && <span className="hidden shrink-0 text-xs text-gray-500 sm:block">{status}</span>}
         {need !== null && (
           <span className="shrink-0 text-xs tabular-nums text-gray-400">
@@ -565,11 +729,49 @@ function TxRow({
         <div className="space-y-3 border-t border-border/70 bg-inset/40 px-4 py-3">
           <CallView call={tx.call} book={book} />
           <Signers tx={tx} book={book} />
-          <TxLinks tx={tx} safeAddress={safeAddress} />
-          <SafeSim client={client} book={book} safeAddress={safeAddress} call={tx.call} />
+          <TxLinks tx={tx} safeAddress={safe.address} />
+          {bundleResult && bundleResult.status !== "success" && (
+            <p className="text-xs text-gray-400">
+              In queue order this{" "}
+              {bundleResult.status === "reverted"
+                ? "reverts"
+                : "executes but its inner call fails"}
+              {bundleResult.reason && (
+                <span className="font-mono text-gray-300">
+                  {" "}
+                  · {safeErrorText(bundleResult.reason)}
+                </span>
+              )}
+              .
+            </p>
+          )}
+          <SafeSim client={client} book={book} safe={safe} tx={tx} />
         </div>
       )}
     </div>
+  );
+}
+
+function BundleBadge({ result }: { result: BundleTxResult }) {
+  const label =
+    result.status === "success"
+      ? "sim ok"
+      : result.status === "inner-failed"
+        ? "sim fails"
+        : "sim reverts";
+  const tone =
+    result.status === "success"
+      ? "bg-green-950/40 text-success"
+      : result.status === "inner-failed"
+        ? "bg-amber-900/25 text-warning"
+        : "bg-red-950/40 text-danger";
+  return (
+    <span
+      title={result.reason ? safeErrorText(result.reason) : undefined}
+      className={`hidden shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:block ${tone}`}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -644,7 +846,7 @@ function TxLinks({ tx, safeAddress }: { tx: SafeMultisigTx; safeAddress: string 
   );
 }
 
-type SimTab = "result" | "trace" | "flow" | "state";
+type SimTab = "result" | "trace" | "flow";
 
 const TRANSFER_TOPIC =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -680,56 +882,98 @@ function countSimTransfers(result: CallResult): number {
   return count;
 }
 
+type ActionRun = { result: CallResult | null; error: string | null };
+
+/** The individual calls a Safe tx performs — MultiSend batches expand to many. */
+function leafCalls(call: DecodedSafeCall): DecodedSafeCall[] {
+  if (!call.inner || call.inner.length === 0) return [call];
+  return call.inner.flatMap(leafCalls);
+}
+
+/**
+ * Two-layer simulation. The verdict replays the real `execTransaction` with the
+ * threshold overridden, so delegatecall, guards and refunds all run for real.
+ * The tabs below it call each action directly from the Safe to get a trace,
+ * because this node ignores state overrides on debug_traceCall — and it has no
+ * prestateTracer for debug_traceCall either, hence no State tab.
+ */
 function SafeSim({
   client,
   book,
-  safeAddress,
-  call,
+  safe,
+  tx,
 }: {
   client: PublicClient;
   book: AddressBook;
-  safeAddress: string;
-  call: DecodedSafeCall;
+  safe: SafeInfo;
+  tx: SafeMultisigTx;
 }) {
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<CallResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [stateDiff, setStateDiff] = useState<StateDiff | null>(null);
+  const [verdict, setVerdict] = useState<SafeExecVerdict | null>(null);
+  const [runs, setRuns] = useState<Record<number, ActionRun>>({});
+  const [active, setActive] = useState(0);
+  const [pending, setPending] = useState<number | null>(null);
   const [tab, setTab] = useState<SimTab>("result");
 
-  const run = async () => {
-    setLoading(true);
-    setResult(null);
-    setError(null);
-    setStateDiff(null);
-    setTab("result");
+  const targets = leafCalls(tx.call);
+  const batch = targets.length > 1;
+
+  const callAction = async (i: number): Promise<ActionRun> => {
+    const target = targets[i];
     try {
-      const to = call.to as Address;
+      const to = target.to as Address;
       const abi = getAbiForAddress(to) ?? null;
-      const params = {
-        to,
-        data: (call.data && call.data !== "0x" ? call.data : "0x") as Hex,
-        from: safeAddress as Address,
-        value: call.value > 0n ? call.value : undefined,
-      };
-      const [r, diff] = await Promise.all([
-        rawCall(client, params, abi),
-        traceCallStateDiff(client, params),
-      ]);
-      setResult(r);
-      setError(r.error ?? null);
-      setStateDiff(diff);
+      const r = await rawCall(
+        client,
+        {
+          to,
+          data: (target.data && target.data !== "0x" ? target.data : "0x") as Hex,
+          from: safe.address,
+          value: target.value > 0n ? target.value : undefined,
+        },
+        abi,
+      );
+      return { result: r, error: r.error ?? null };
     } catch (e) {
-      setError(humanizeError(e instanceof Error ? e.message : String(e)));
-    } finally {
-      setLoading(false);
+      return {
+        result: null,
+        error: humanizeError(e instanceof Error ? e.message : String(e)),
+      };
     }
   };
 
+  const run = async () => {
+    setLoading(true);
+    setRuns({});
+    setVerdict(null);
+    setActive(0);
+    setTab("result");
+    const [v, first] = await Promise.all([
+      simulateExecTransaction(client, safe, tx).catch(
+        (e): SafeExecVerdict => ({
+          status: "unavailable",
+          reason: humanizeError(e instanceof Error ? e.message : String(e)),
+        }),
+      ),
+      callAction(0),
+    ]);
+    setVerdict(v);
+    setRuns({ 0: first });
+    setLoading(false);
+  };
+
+  const selectAction = async (i: number) => {
+    setActive(i);
+    if (runs[i] || pending !== null) return;
+    setPending(i);
+    const r = await callAction(i);
+    setRuns((prev) => ({ ...prev, [i]: r }));
+    setPending(null);
+  };
+
+  const current = runs[active];
+  const result = current?.result ?? null;
   const trace = result?.trace ?? null;
-  const stateCount = stateDiff
-    ? new Set([...Object.keys(stateDiff.pre), ...Object.keys(stateDiff.post)]).size
-    : 0;
 
   return (
     <div className="space-y-3 border-t border-border/70 pt-3">
@@ -743,60 +987,160 @@ function SafeSim({
           {loading ? "Simulating…" : "Simulate"}
         </button>
         <span className="text-xs text-gray-500">
-          Calls as the Safe against current chain state
-          {call.operation === 1 ? " (delegatecall simulated as a call)" : ""}.
+          Replays execTransaction against current chain state.
         </span>
       </div>
 
-      {result && (
-        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-gray-900/80 p-1 ring-1 ring-border">
-          <SimTabButton active={tab === "result"} onClick={() => setTab("result")}>
-            Result
-          </SimTabButton>
-          {trace && (
-            <SimTabButton
-              active={tab === "trace"}
-              onClick={() => setTab("trace")}
-              badge={countCalls(trace)}
-            >
-              Trace
-            </SimTabButton>
-          )}
-          {trace && (
-            <SimTabButton
-              active={tab === "flow"}
-              onClick={() => setTab("flow")}
-              badge={countSimTransfers(result) || undefined}
-            >
-              Flow
-            </SimTabButton>
-          )}
-          {stateDiff && (
-            <SimTabButton
-              active={tab === "state"}
-              onClick={() => setTab("state")}
-              badge={stateCount}
-            >
-              State
-            </SimTabButton>
-          )}
+      {verdict && <VerdictBanner verdict={verdict} book={book} />}
+
+      {batch && verdict && (
+        <div>
+          <p className="mb-1.5 text-xs text-gray-500">
+            Traces below run each action on its own as a call from the Safe, so they
+            can drift from the batch.
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {targets.map((t, i) => {
+              const actionRun = runs[i];
+              const ok = actionRun ? !actionRun.error : null;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => selectAction(i)}
+                  className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
+                    i === active
+                      ? "bg-gray-800 text-gray-100"
+                      : "text-gray-500 hover:bg-gray-800/50 hover:text-gray-300"
+                  }`}
+                >
+                  <span
+                    className={`size-1.5 rounded-full ${
+                      pending === i
+                        ? "bg-gray-500"
+                        : ok === null
+                          ? "bg-gray-700"
+                          : ok
+                            ? "bg-success"
+                            : "bg-danger"
+                    }`}
+                  />
+                  <span className="tabular-nums text-gray-600">{i + 1}</span>
+                  <span className="max-w-40 truncate">{callTitle(t)}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {(tab === "result" || !result) && <ResultPanel result={result} error={error} />}
+      {pending !== null && !current && (
+        <p className="text-xs text-gray-500">Simulating…</p>
+      )}
 
-      {tab === "trace" && trace && (
+      {current && (
         <>
-          <CallTrace trace={trace} book={book} />
-          <GasProfiler trace={trace} book={book} />
+          <div className="flex flex-wrap items-center gap-1 rounded-lg bg-gray-900/80 p-1 ring-1 ring-border">
+            <SimTabButton active={tab === "result"} onClick={() => setTab("result")}>
+              Result
+            </SimTabButton>
+            {trace && (
+              <SimTabButton
+                active={tab === "trace"}
+                onClick={() => setTab("trace")}
+                badge={countCalls(trace)}
+              >
+                Trace
+              </SimTabButton>
+            )}
+            {trace && result && (
+              <SimTabButton
+                active={tab === "flow"}
+                onClick={() => setTab("flow")}
+                badge={countSimTransfers(result) || undefined}
+              >
+                Flow
+              </SimTabButton>
+            )}
+          </div>
+
+          {tab === "result" && (
+            <>
+              <ResultPanel result={result} error={current.error} />
+              {result?.gasEstimate !== undefined && (
+                <p className="text-xs text-gray-600">
+                  Gas covers this action only — it excludes execTransaction overhead
+                  and any refund.
+                </p>
+              )}
+            </>
+          )}
+
+          {tab === "trace" && trace && (
+            <>
+              <CallTrace trace={trace} book={book} />
+              <GasProfiler trace={trace} book={book} />
+            </>
+          )}
+
+          {tab === "flow" && trace && (
+            <MoneyFlow trace={trace} logs={result?.logs} book={book} client={client} />
+          )}
         </>
       )}
+    </div>
+  );
+}
 
-      {tab === "flow" && trace && (
-        <MoneyFlow trace={trace} logs={result?.logs} book={book} client={client} />
+function VerdictBanner({
+  verdict,
+  book,
+}: {
+  verdict: SafeExecVerdict;
+  book: AddressBook;
+}) {
+  if (verdict.status === "unavailable") {
+    return (
+      <div className="rounded-lg bg-gray-900/60 px-3 py-2 ring-1 ring-border">
+        <p className="text-xs text-gray-400">execTransaction could not be replayed</p>
+        <p className="mt-0.5 text-xs text-gray-500">{verdict.reason}</p>
+      </div>
+    );
+  }
+
+  const tone =
+    verdict.status === "success"
+      ? { ring: "ring-green-900/50", bg: "bg-green-950/30", text: "text-success" }
+      : verdict.status === "inner-failed"
+        ? { ring: "ring-amber-900/50", bg: "bg-amber-900/15", text: "text-warning" }
+        : { ring: "ring-red-900/50", bg: "bg-red-950/30", text: "text-danger" };
+
+  const title =
+    verdict.status === "success"
+      ? "Would execute successfully"
+      : verdict.status === "inner-failed"
+        ? "Would execute, but the inner call fails"
+        : "Would revert";
+
+  return (
+    <div className={`rounded-lg px-3 py-2 ring-1 ${tone.bg} ${tone.ring}`}>
+      <p className={`text-xs font-medium ${tone.text}`}>{title}</p>
+      {verdict.status === "reverted" && (
+        <p className="mt-0.5 font-mono text-xs break-all text-gray-300">
+          {verdict.reason}
+        </p>
       )}
-
-      {tab === "state" && stateDiff && <StateChanges diff={stateDiff} book={book} />}
+      {verdict.status === "inner-failed" && (
+        <p className="mt-0.5 text-xs text-gray-400">
+          execTransaction returns false and emits ExecutionFailure — the Safe still
+          consumes the nonce.
+        </p>
+      )}
+      <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-gray-500">
+        Real execTransaction as
+        <AddressLabel address={verdict.owner} book={book} />
+        with threshold overridden to 1, so only signature checks are skipped.
+      </p>
     </div>
   );
 }
